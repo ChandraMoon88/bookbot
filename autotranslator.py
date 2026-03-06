@@ -178,16 +178,7 @@ LANG_NORMALIZE = {
 def normalize_lang(code: str) -> str:
     """Normalize langdetect output to a deep-translator compatible code."""
     lower = code.lower()
-    normalized = LANG_NORMALIZE.get(lower, lower)
-    # Verify it's a supported translation language; fallback to 'en'
-    if normalized in TRANSLATE_LANGS:
-        return normalized
-    # Try base code (e.g. "zh-CN" → "zh")
-    base = normalized.split("-")[0]
-    if base in TRANSLATE_LANGS:
-        return base
-    return "en"
-
+    return LANG_NORMALIZE.get(lower, lower)
 
 def get_gtts_lang(lang_code: str) -> str:
     """Return a valid gTTS language code, falling back to 'en'."""
