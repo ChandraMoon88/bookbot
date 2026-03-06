@@ -322,12 +322,51 @@ async def download_audio(url: str, access_token: str) -> bytes:
         return response.content
 
 
+# Locales to probe when user language is not yet known.
+# Ordered by global usage — early exit fires when confidence >= 0.85.
+PROBE_LOCALES = [
+    "en-US", "hi-IN", "te-IN", "ta-IN", "kn-IN", "ml-IN",
+    "bn-IN", "mr-IN", "gu-IN", "pa-IN", "ur-PK",
+    "ar-SA", "fr-FR", "es-ES", "de-DE", "pt-BR",
+    "ru-RU", "ja-JP", "ko-KR", "zh-CN",
+]
+
+
+def _try_locales(audio_data, locales: list) -> tuple:
+    """Try each locale with show_all, return (best_text, best_confidence, best_locale)."""
+    recognizer = sr.Recognizer()
+    best_text, best_conf, best_locale = "", -1.0, ""
+    for locale in locales:
+        try:
+            raw = recognizer.recognize_google(audio_data, language=locale, show_all=True)
+            if not raw:
+                continue
+            if isinstance(raw, dict):
+                alts = raw.get("alternative", [])
+                if alts:
+                    text = alts[0].get("transcript", "")
+                    conf = float(alts[0].get("confidence", 0.5))
+                    if text and conf > best_conf:
+                        best_conf, best_text, best_locale = conf, text, locale
+                    if best_conf >= 0.85:   # confident enough — stop probing
+                        break
+            elif isinstance(raw, str) and raw:
+                best_text, best_locale = raw, locale
+                best_conf = 0.7
+                break
+        except sr.UnknownValueError:
+            continue
+        except Exception as e:
+            print(f"STT locale [{locale}] error: {e}")
+            continue
+    return best_text, best_conf, best_locale
+
+
 def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
     recognizer = sr.Recognizer()
-    # Lowered threshold + dynamic adjustment handles slow, fast, quiet speech
     recognizer.energy_threshold = 200
     recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 1.5   # wait longer before cutting off
+    recognizer.pause_threshold = 1.5
 
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
@@ -338,44 +377,24 @@ def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
         with sr.AudioFile(wav_io) as source:
             audio_data = recognizer.record(source)
 
-        # Try hint language first, then English as fallback
-        # Use show_all=True to get confidence scores and pick the best result
-        locales = [get_speech_locale(lang_code)]
-        if lang_code != "en":
-            locales.append("en-US")
+        if lang_code == "en":
+            # Language unknown — probe all common locales for best match
+            text, conf, locale = _try_locales(audio_data, PROBE_LOCALES)
+        else:
+            # Known language — try it first, fall back to en-US if low confidence
+            known_locale = get_speech_locale(lang_code)
+            text, conf, locale = _try_locales(audio_data, [known_locale, "en-US"])
+            if conf < 0.5:
+                # Still low confidence — do a full probe
+                text2, conf2, locale2 = _try_locales(audio_data, PROBE_LOCALES)
+                if conf2 > conf:
+                    text, conf, locale = text2, conf2, locale2
 
-        best_text = ""
-        best_conf = -1.0
-
-        for locale in locales:
-            try:
-                raw = recognizer.recognize_google(
-                    audio_data, language=locale, show_all=True
-                )
-                if not raw:
-                    continue
-                if isinstance(raw, dict):
-                    alts = raw.get("alternative", [])
-                    if alts:
-                        text = alts[0].get("transcript", "")
-                        conf = float(alts[0].get("confidence", 0.5))
-                        if text and conf > best_conf:
-                            best_conf = conf
-                            best_text = text
-                elif isinstance(raw, str) and raw:
-                    # show_all sometimes returns plain string
-                    best_text = raw
-                    break
-            except sr.UnknownValueError:
-                continue
-            except Exception as e:
-                print(f"STT attempt failed [{locale}]: {e}")
-                continue
-
-        print(f"STT result (lang={lang_code}, conf={best_conf:.2f}): '{best_text}'")
-        return best_text
+        print(f"STT best: locale={locale}, conf={conf:.2f}, text='{text}'")
+        return text
 
     except Exception as e:
         print(f"STT error: {e}")
         return ""
+
 
