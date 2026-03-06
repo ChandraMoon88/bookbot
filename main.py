@@ -24,8 +24,13 @@ WELCOME_MESSAGE = (
 )
 
 GREETING_KEYWORDS = {
-    "hi", "hello", "hey", "hlo", "hii", "howdy",
-    "greetings", "good morning", "good afternoon", "good evening"
+    "hi", "hello", "hey", "hlo", "hii", "howdy", "sup", "yo",
+    "greetings", "morning", "afternoon", "evening", "night",
+    "good morning", "good afternoon", "good evening", "good night",
+    "good day", "how are you", "what's up", "whats up",
+    "namaste", "namaskar", "salaam", "salam", "shalom", "bonjour",
+    "hola", "ciao", "konnichiwa", "annyeong", "nihao", "nǐ hǎo",
+    "welcome", "start", "begin", "help"
 }
 
 
@@ -108,8 +113,12 @@ async def receive_message(request: Request):
                     english_message = translate_to_english(user_message)
                     print(f"English intent [{sender_id}]: {english_message}")
 
+                    # Substring match so "Good Morning!" / "Good morning, friend" all work
+                    lowered = english_message.strip().lower()
+                    is_greeting = any(kw in lowered for kw in GREETING_KEYWORDS)
+
                     # Build bot response (always in English internally)
-                    if english_message.strip().lower() in GREETING_KEYWORDS:
+                    if is_greeting:
                         bot_response = WELCOME_MESSAGE
                     else:
                         bot_response = f"You said: {user_message}"
