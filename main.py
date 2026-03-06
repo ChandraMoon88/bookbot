@@ -5,7 +5,8 @@ import os
 import json
 from autotranslator import (
     detect_language, get_user_language, set_user_language,
-    translate_to, text_to_speech_bytes, speech_to_text, download_audio
+    translate_to, translate_to_english, text_to_speech_bytes,
+    speech_to_text, download_audio
 )
 
 app = FastAPI()
@@ -103,8 +104,12 @@ async def receive_message(request: Request):
                             set_user_language(sender_id, detected)
                             print(f"Language detected for {sender_id}: {detected}")
 
+                    # Translate user message to English for intent detection
+                    english_message = translate_to_english(user_message)
+                    print(f"English intent [{sender_id}]: {english_message}")
+
                     # Build bot response (always in English internally)
-                    if user_message.strip().lower() in GREETING_KEYWORDS:
+                    if english_message.strip().lower() in GREETING_KEYWORDS:
                         bot_response = WELCOME_MESSAGE
                     else:
                         bot_response = f"You said: {user_message}"
