@@ -111,7 +111,6 @@ async def receive_message(request: Request):
                     english_message = translate_to_english(user_message)
                     print(f"English intent [{sender_id}]: {english_message}")
 
-                    # Substring match so "Good Morning!" / "Good morning, friend" all work
                     lowered = english_message.strip().lower()
                     is_greeting = any(kw in lowered for kw in GREETING_KEYWORDS)
 
