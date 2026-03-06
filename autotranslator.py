@@ -1,6 +1,6 @@
 import io
 import httpx
-from langdetect import detect, DetectorFactory
+from langdetect import detect_langs, DetectorFactory
 from deep_translator import GoogleTranslator
 from gtts import gTTS
 from gtts.lang import tts_langs
@@ -256,14 +256,19 @@ def detect_script_language(text: str):
 
 
 def detect_language(text: str) -> str:
-    # Try Unicode script detection first (handles short non-Latin text reliably)
+    # Unicode script detection first — handles all non-Latin scripts reliably
     script_lang = detect_script_language(text)
     if script_lang:
         return normalize_lang(script_lang)
-    # Fallback to langdetect for Latin/Cyrillic scripts
+
+    # For Latin/Cyrillic: use langdetect with confidence threshold
+    # Short words like "hello" have low confidence and should stay as "en"
     try:
-        raw = detect(text)
-        return normalize_lang(raw)
+        langs = detect_langs(text)
+        if langs and langs[0].prob >= 0.80:
+            return normalize_lang(langs[0].lang)
+        # Low confidence = ambiguous short word → default to English
+        return "en"
     except Exception:
         return "en"
 
