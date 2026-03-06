@@ -88,10 +88,10 @@ async def receive_message(request: Request):
 
                         print(f"Transcribed voice [{sender_id}]: {user_message}")
 
-                        if not get_user_language(sender_id):
-                            detected = detect_language(user_message)
-                            set_user_language(sender_id, detected)
-                            print(f"Language detected for {sender_id}: {detected}")
+                        # Always re-detect language from transcribed text
+                        detected = detect_language(user_message)
+                        set_user_language(sender_id, detected)
+                        print(f"Language detected for {sender_id}: {detected}")
 
                     else:
                         # Text input
@@ -101,11 +101,10 @@ async def receive_message(request: Request):
 
                         print(f"Message from {sender_id}: {user_message}")
 
-                        # Auto-detect and store language on first message
-                        if not get_user_language(sender_id):
-                            detected = detect_language(user_message)
-                            set_user_language(sender_id, detected)
-                            print(f"Language detected for {sender_id}: {detected}")
+                        # Always re-detect language so users can switch languages freely
+                        detected = detect_language(user_message)
+                        set_user_language(sender_id, detected)
+                        print(f"Language detected for {sender_id}: {detected}")
 
                     # Translate user message to English for intent detection
                     english_message = translate_to_english(user_message)
