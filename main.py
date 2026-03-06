@@ -77,7 +77,11 @@ async def send_message(recipient_id: str, message_text: str):
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=payload)
-        print("Reply sent:", response.json())
+        result = response.json()
+        if response.status_code == 200:
+            print("Message sent successfully:", result)
+        else:
+            print(f"ERROR sending message [HTTP {response.status_code}]:", result)
 
 
 # ✅ Health check
