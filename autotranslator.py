@@ -14,8 +14,10 @@ user_languages: dict = {}
 
 # Dynamically fetch all languages supported by deep-translator and gTTS at startup
 try:
-    TRANSLATE_LANGS = set(GoogleTranslator.get_supported_languages())
-    print(f"Translation languages loaded: {len(TRANSLATE_LANGS)}")
+    _lang_dict = GoogleTranslator.get_supported_languages(as_dict=True)
+    # _lang_dict maps name→code e.g. {"telugu": "te", "hindi": "hi", ...}
+    TRANSLATE_LANGS = set(_lang_dict.values())  # set of codes: {"te", "hi", "en", ...}
+    print(f"Translation language codes loaded: {len(TRANSLATE_LANGS)}")
 except Exception:
     TRANSLATE_LANGS = {"en"}
 
