@@ -84,7 +84,22 @@ async def send_message(recipient_id: str, message_text: str):
             print(f"ERROR sending message [HTTP {response.status_code}]:", result)
 
 
-# ✅ Health check
+# Subscribe page to webhook events
+@app.get("/setup")
+async def setup():
+    url = f"https://graph.facebook.com/v17.0/me/subscribed_apps"
+    params = {
+        "subscribed_fields": "messages,messaging_postbacks",
+        "access_token": PAGE_ACCESS_TOKEN
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, params=params)
+        result = response.json()
+        print("Setup result:", result)
+        return result
+
+
+# Health check
 @app.get("/")
 def root():
-    return {"status": "Bot is running! ✅"}
+    return {"status": "Bot is running!"}
