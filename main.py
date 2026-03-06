@@ -28,8 +28,6 @@ GREETING_KEYWORDS = {
     "greetings", "morning", "afternoon", "evening", "night",
     "good morning", "good afternoon", "good evening", "good night",
     "good day", "how are you", "what's up", "whats up",
-    "namaste", "namaskar", "salaam", "salam", "shalom", "bonjour",
-    "hola", "ciao", "konnichiwa", "annyeong", "nihao", "nǐ hǎo",
     "welcome", "start", "begin", "help"
 }
 
