@@ -324,6 +324,11 @@ async def download_audio(url: str, access_token: str) -> bytes:
 
 def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
     recognizer = sr.Recognizer()
+    # Lowered threshold + dynamic adjustment handles slow, fast, quiet speech
+    recognizer.energy_threshold = 200
+    recognizer.dynamic_energy_threshold = True
+    recognizer.pause_threshold = 1.5   # wait longer before cutting off
+
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         wav_io = io.BytesIO()
@@ -333,8 +338,44 @@ def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
         with sr.AudioFile(wav_io) as source:
             audio_data = recognizer.record(source)
 
-        locale = get_speech_locale(lang_code)
-        return recognizer.recognize_google(audio_data, language=locale)
+        # Try hint language first, then English as fallback
+        # Use show_all=True to get confidence scores and pick the best result
+        locales = [get_speech_locale(lang_code)]
+        if lang_code != "en":
+            locales.append("en-US")
+
+        best_text = ""
+        best_conf = -1.0
+
+        for locale in locales:
+            try:
+                raw = recognizer.recognize_google(
+                    audio_data, language=locale, show_all=True
+                )
+                if not raw:
+                    continue
+                if isinstance(raw, dict):
+                    alts = raw.get("alternative", [])
+                    if alts:
+                        text = alts[0].get("transcript", "")
+                        conf = float(alts[0].get("confidence", 0.5))
+                        if text and conf > best_conf:
+                            best_conf = conf
+                            best_text = text
+                elif isinstance(raw, str) and raw:
+                    # show_all sometimes returns plain string
+                    best_text = raw
+                    break
+            except sr.UnknownValueError:
+                continue
+            except Exception as e:
+                print(f"STT attempt failed [{locale}]: {e}")
+                continue
+
+        print(f"STT result (lang={lang_code}, conf={best_conf:.2f}): '{best_text}'")
+        return best_text
+
     except Exception as e:
-        print(f"STT error [{lang_code}]: {e}")
+        print(f"STT error: {e}")
         return ""
+
