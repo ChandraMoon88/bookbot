@@ -184,9 +184,8 @@ def get_edge_voice(lang_code: str) -> str:
 def text_to_speech_bytes(text: str, lang: str) -> bytes:
     """Convert text to speech using Edge TTS — no rate limits, 100+ languages.
 
-    Edge TTS is async-only. asyncio.run() and loop.run_until_complete() both
-    fail inside Uvicorn's running event loop. Fix: run the coroutine in a
-    worker thread that owns its own isolated event loop.
+    Runs the async coroutine in an isolated worker thread so it never
+    conflicts with Uvicorn's running event loop.
     """
     import concurrent.futures
 
@@ -202,9 +201,11 @@ def text_to_speech_bytes(text: str, lang: str) -> bytes:
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            audio_bytes = executor.submit(_run_in_thread).result()
+            audio_bytes = executor.submit(_run_in_thread).result(timeout=15)
         if audio_bytes:
-            print(f"Edge TTS success [{lang}] voice={voice}")
+            print(f"Edge TTS success [{lang}] voice={voice} bytes={len(audio_bytes)}")
+        else:
+            print(f"Edge TTS returned empty bytes [{lang}]")
         return audio_bytes
     except Exception as e:
         print(f"Edge TTS error [{lang}]: {e}")
@@ -386,10 +387,9 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
     """
     Transcribe audio with Whisper and return (transcript, detected_lang_code).
 
-    lang_hint: previously confirmed language for this user. When provided and
-    Whisper auto-detect confidence is below 0.75, a second pass is run with the
-    language pinned — prevents mis-identification of low-resource languages
-    (e.g. Telugu being transcribed as Portuguese or Russian).
+    lang_hint: previously confirmed language for this user. When confidence
+    is below threshold, re-runs with pinned language to avoid mis-detection
+    of low-resource languages (e.g. Telugu → Portuguese/Russian).
     """
     CONFIDENCE_THRESHOLD = 0.75
 
@@ -415,20 +415,14 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
         detected_lang = normalize_lang(info.language)
         prob = info.language_probability
 
-        print(
-            f"Whisper STT (auto): lang={detected_lang} "
-            f"(prob={prob:.2f}), text='{text}'"
-        )
+        print(f"Whisper STT (auto): lang={detected_lang} (prob={prob:.2f}), text='{text}'")
 
         # Second pass: pin to hint when auto-detect is uncertain
         if lang_hint and lang_hint != "en" and prob < CONFIDENCE_THRESHOLD and detected_lang != lang_hint:
             print(f"Low confidence ({prob:.2f}) — re-transcribing with pinned lang='{lang_hint}'")
             segments2, info2 = model.transcribe(
-                tmp_path,
-                beam_size=5,
-                language=lang_hint,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
+                tmp_path, beam_size=5, language=lang_hint,
+                vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500),
             )
             text2 = " ".join(seg.text.strip() for seg in segments2).strip()
             print(f"Whisper STT (pinned={lang_hint}): prob={info2.language_probability:.2f}, text='{text2}'")
