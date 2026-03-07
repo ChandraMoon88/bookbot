@@ -11,8 +11,9 @@ from autotranslator import (
 
 app = FastAPI()
 
-VERIFY_TOKEN = "mybot123"
-PAGE_ACCESS_TOKEN = "EAAWVRMLpTZAUBQyFZAULnQT6IYHPuAEZBLKTYTrNwfUrPLSTavpnAHVhDlP6weUQpuwi6jXUwZAVCI9O1ZBF8axTI2wIKcHwyaiThXl74qyZCovEGOKuyiCcD6BnSe6ZAstYlkZAgXzc20B0kmO4D9fKY7FQEfuGxWS9HgNQ7oasz1QZB7C9ibtWzkT2THNpcS4iR728Ih0oTlQZDZD"
+# ✅ SAFE — reads from environment
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mybot123")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
 WELCOME_MESSAGE = (
     "Welcome to BookBot!\n\n"
