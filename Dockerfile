@@ -1,5 +1,11 @@
 FROM python:3.10-slim
 
+# ── Critical: flush all Python stdout/stderr immediately to container logs ──
+# Without this, print() is buffered and the container looks frozen during
+# the ~5-min model pre-warm on startup. This makes every log line instant.
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONFAULTHANDLER=1
+
 RUN apt-get update && apt-get install -y \
     ffmpeg gcc g++ libsndfile1 patchelf \
     && rm -rf /var/lib/apt/lists/*

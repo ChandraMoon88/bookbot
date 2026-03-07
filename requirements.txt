@@ -1,3 +1,9 @@
+# ── pip global flags ─────────────────────────────────────────────────────────
+# --only-binary=:all:  → never build from source; use pre-built wheels only.
+# This prevents the gfortran/Fortran compiler error when installing scipy
+# on python:3.10-slim (which has no Fortran toolchain), and on Render.
+--only-binary=:all:
+
 # ── Web framework ─────────────────────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn==0.29.0
