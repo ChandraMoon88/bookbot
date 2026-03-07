@@ -153,15 +153,21 @@ def translate_to(text: str, target_lang: str) -> str:
 
 def text_to_speech_bytes(text: str, lang: str) -> bytes:
     gtts_lang = get_gtts_lang(lang)
-    try:
-        tts = gTTS(text=text, lang=gtts_lang)
-        buf = io.BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        return buf.read()
-    except Exception as e:
-        print(f"TTS error [{gtts_lang}]: {e}")
-        return b""
+    # Retry up to 3 times for 429 errors
+    for attempt in range(3):
+        try:
+            tts = gTTS(text=text, lang=gtts_lang)
+            buf = io.BytesIO()
+            tts.write_to_fp(buf)
+            buf.seek(0)
+            return buf.read()
+        except Exception as e:
+            print(f"TTS attempt {attempt+1} failed [{gtts_lang}]: {e}")
+            if attempt < 2:
+                import time
+                time.sleep(2)
+    print("TTS failed after 3 attempts — skipping voice")
+    return b""
 
 
 async def download_audio(url: str, access_token: str) -> bytes:

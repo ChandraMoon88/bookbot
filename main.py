@@ -1,3 +1,11 @@
+import socket
+
+# Force IPv4 DNS resolution
+original_getaddrinfo = socket.getaddrinfo
+def patched_getaddrinfo(host, port, *args, **kwargs):
+    return original_getaddrinfo(host, port, socket.AF_INET, *args[1:], **kwargs)
+socket.getaddrinfo = patched_getaddrinfo
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -144,11 +152,10 @@ async def reply_with_translation(sender_id: str, english_text: str):
 
 
 async def send_text(recipient_id: str, message_text: str):
-    # Check token exists
     if not PAGE_ACCESS_TOKEN:
         print("ERROR: PAGE_ACCESS_TOKEN is not set!")
         return
-        
+
     url = "https://graph.facebook.com/v17.0/me/messages"
     headers = {
         "Content-Type": "application/json",
@@ -158,16 +165,31 @@ async def send_text(recipient_id: str, message_text: str):
         "recipient": {"id": recipient_id},
         "message": {"text": message_text}
     }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            result = response.json()
-            if response.status_code == 200:
-                print("Text sent successfully")
+
+    # Retry up to 3 times
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(
+                timeout=30.0,
+                transport=httpx.AsyncHTTPTransport(retries=3)
+            ) as client:
+                response = await client.post(
+                    url, headers=headers, json=payload
+                )
+                result = response.json()
+                if response.status_code == 200:
+                    print(f"Text sent successfully on attempt {attempt+1}")
+                    return
+                else:
+                    print(f"ERROR [{response.status_code}]: {result}")
+                    return
+        except Exception as e:
+            print(f"Attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                import asyncio
+                await asyncio.sleep(2)  # wait 2 seconds before retry
             else:
-                print(f"ERROR sending text [HTTP {response.status_code}]:", result)
-    except Exception as e:
-        print(f"ERROR in send_text: {e}")
+                print("All 3 attempts failed!")
 
 
 async def send_audio(recipient_id: str, audio_bytes: bytes):
