@@ -1,50 +1,25 @@
-import socket
-
-# Force IPv4 DNS resolution
-original_getaddrinfo = socket.getaddrinfo
-def patched_getaddrinfo(host, port, *args, **kwargs):
-    return original_getaddrinfo(host, port, socket.AF_INET, *args[1:], **kwargs)
-socket.getaddrinfo = patched_getaddrinfo
-
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mybot123")
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-print(f"TOKEN LOADED: {PAGE_ACCESS_TOKEN[:20] if PAGE_ACCESS_TOKEN else 'NOT FOUND!'}")
-
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 import httpx
+import os
 import json
-from autotranslator import (
-    detect_language, get_user_language, set_user_language,
-    translate_to, translate_to_english, text_to_speech_bytes,
-    speech_to_text, download_audio
-)
+import base64
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI()
 
-WELCOME_MESSAGE = (
-    "Welcome to BookBot!\n\n"
-    "I'm your hotel booking assistant. I can help you with:\n"
-    "- Search & book hotel rooms\n"
-    "- Check availability\n"
-    "- Manage your reservations\n\n"
-    "Type or Voice 'book' to start a new booking or 'help' to see all options."
-)
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mybot123")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+HF_PROCESSOR_URL = os.getenv("HF_PROCESSOR_URL")
 
-GREETING_KEYWORDS = {
-    "hi", "hello", "hey", "hlo", "hii", "howdy", "sup", "yo",
-    "greetings", "morning", "afternoon", "evening", "night",
-    "good morning", "good afternoon", "good evening", "good night",
-    "good day", "how are you", "what's up", "whats up",
-    "welcome", "start", "begin", "help"
-}
+print(f"TOKEN LOADED: {PAGE_ACCESS_TOKEN[:20] if PAGE_ACCESS_TOKEN else 'NOT FOUND!'}")
+print(f"HF URL: {HF_PROCESSOR_URL}")
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "bot": "bookhotel-webhook"}
 
-# Webhook Verification
 @app.get("/webhook")
 async def verify_webhook(
     hub_mode: str = Query(None, alias="hub.mode"),
@@ -52,12 +27,9 @@ async def verify_webhook(
     hub_challenge: str = Query(None, alias="hub.challenge")
 ):
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        print("Webhook Verified!")
         return PlainTextResponse(content=hub_challenge, status_code=200)
     return PlainTextResponse(content="Forbidden", status_code=403)
 
-
-# Receive Messages
 @app.post("/webhook")
 async def receive_message(request: Request):
     data = await request.json()
@@ -67,95 +39,81 @@ async def receive_message(request: Request):
             for event in entry.get("messaging", []):
                 sender_id = event["sender"]["id"]
 
-                # Handle "Get Started" button postback
                 if "postback" in event:
                     payload = event["postback"].get("payload", "")
-                    print(f"Postback from {sender_id}: {payload}")
                     if payload == "GET_STARTED":
-                        await reply_with_translation(sender_id, WELCOME_MESSAGE)
+                        await call_processor_and_reply(
+                            sender_id, "hello", "text"
+                        )
 
                 elif "message" in event:
                     msg = event["message"]
                     attachments = msg.get("attachments", [])
-
-                    # Voice input
                     audio_attachment = next(
                         (a for a in attachments if a.get("type") == "audio"), None
                     )
 
                     if audio_attachment:
                         audio_url = audio_attachment["payload"]["url"]
-                        print(f"Voice message from {sender_id}: {audio_url}")
-
-                        audio_bytes = await download_audio(audio_url, PAGE_ACCESS_TOKEN)
-                        # Whisper returns (transcript, detected_language) in one shot —
-                        # no locale probing, no hardcoded language lists.
-                        user_message, detected = speech_to_text(audio_bytes)
-
-                        if not user_message:
-                            await send_text(
-                                sender_id,
-                                "Sorry, I couldn't understand that voice message. Please try again."
+                        # Download audio
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            response = await client.get(
+                                audio_url,
+                                headers={"Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"},
+                                follow_redirects=True
                             )
-                            continue
-
-                        set_user_language(sender_id, detected)
-                        print(f"Whisper [{sender_id}]: lang={detected}, text='{user_message}'")
-
+                            audio_bytes = response.content
+                        audio_b64 = base64.b64encode(audio_bytes).decode()
+                        await call_processor_and_reply(
+                            sender_id, None, "voice", audio_b64
+                        )
                     else:
-                        # Text input
                         user_message = msg.get("text", "")
-                        if not user_message:
-                            continue
-
-                        print(f"Message from {sender_id}: {user_message}")
-
-                        # Always re-detect language so users can switch languages freely
-                        detected = detect_language(user_message)
-                        set_user_language(sender_id, detected)
-                        print(f"Language detected for {sender_id}: {detected}")
-
-                    # Translate user message to English for intent detection
-                    # Passing the detected language avoids transliteration
-                    english_message = translate_to_english(user_message, detected)
-                    print(f"English intent [{sender_id}]: {english_message}")
-
-                    lowered = english_message.strip().lower()
-                    is_greeting = any(kw in lowered for kw in GREETING_KEYWORDS)
-
-                    # Build bot response (always in English internally)
-                    if is_greeting:
-                        bot_response = WELCOME_MESSAGE
-                    else:
-                        bot_response = f"You said: {user_message}"
-
-                    # Send translated text + voice response
-                    await reply_with_translation(sender_id, bot_response)
+                        if user_message:
+                            await call_processor_and_reply(
+                                sender_id, user_message, "text"
+                            )
 
     return {"status": "ok"}
 
 
-async def reply_with_translation(sender_id: str, english_text: str):
-    """Translate to user's language then send both text and voice."""
-    lang = get_user_language(sender_id) or "en"
+async def call_processor_and_reply(
+    sender_id: str,
+    message: str,
+    msg_type: str,
+    audio_b64: str = None
+):
+    try:
+        # Call HF Space for AI processing
+        payload = {
+            "sender_id": sender_id,
+            "type": msg_type,
+            "message": message,
+            "audio_b64": audio_b64
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{HF_PROCESSOR_URL}/process",
+                json=payload
+            )
+            result = response.json()
 
-    translated = translate_to(english_text, lang)
-    print(f"Replying to {sender_id} in [{lang}]: {translated[:60]}...")
+        # Send text reply to Facebook
+        text = result.get("text", "Sorry, something went wrong.")
+        await send_text(sender_id, text)
 
-    # Send text
-    await send_text(sender_id, translated)
+        # Send audio reply if available
+        audio_data = result.get("audio_b64")
+        if audio_data:
+            audio_bytes = base64.b64decode(audio_data)
+            await send_audio(sender_id, audio_bytes)
 
-    # Send voice
-    audio_bytes = text_to_speech_bytes(translated, lang)
-    if audio_bytes:
-        await send_audio(sender_id, audio_bytes)
+    except Exception as e:
+        print(f"Error calling processor: {e}")
+        await send_text(sender_id, "Sorry, I'm having trouble right now.")
 
 
 async def send_text(recipient_id: str, message_text: str):
-    if not PAGE_ACCESS_TOKEN:
-        print("ERROR: PAGE_ACCESS_TOKEN is not set!")
-        return
-
     url = "https://graph.facebook.com/v17.0/me/messages"
     headers = {
         "Content-Type": "application/json",
@@ -165,31 +123,15 @@ async def send_text(recipient_id: str, message_text: str):
         "recipient": {"id": recipient_id},
         "message": {"text": message_text}
     }
-
-    # Retry up to 3 times
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(
-                timeout=30.0,
-                transport=httpx.AsyncHTTPTransport(retries=3)
-            ) as client:
-                response = await client.post(
-                    url, headers=headers, json=payload
-                )
-                result = response.json()
-                if response.status_code == 200:
-                    print(f"Text sent successfully on attempt {attempt+1}")
-                    return
-                else:
-                    print(f"ERROR [{response.status_code}]: {result}")
-                    return
-        except Exception as e:
-            print(f"Attempt {attempt+1} failed: {e}")
-            if attempt < 2:
-                import asyncio
-                await asyncio.sleep(2)  # wait 2 seconds before retry
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code == 200:
+                print("Text sent successfully ✅")
             else:
-                print("All 3 attempts failed!")
+                print(f"ERROR: {response.json()}")
+    except Exception as e:
+        print(f"send_text error: {e}")
 
 
 async def send_audio(recipient_id: str, audio_bytes: bytes):
@@ -205,31 +147,14 @@ async def send_audio(recipient_id: str, audio_bytes: bytes):
         })
     }
     files = {"filedata": ("voice.mp3", audio_bytes, "audio/mpeg")}
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, data=data, files=files)
-        result = response.json()
-        if response.status_code == 200:
-            print("Audio sent successfully")
-        else:
-            print(f"ERROR sending audio [HTTP {response.status_code}]:", result)
-
-
-# Subscribe page to webhook events
-@app.get("/setup")
-async def setup():
-    url = "https://graph.facebook.com/v17.0/me/subscribed_apps"
-    params = {
-        "subscribed_fields": "messages,messaging_postbacks",
-        "access_token": PAGE_ACCESS_TOKEN
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, params=params)
-        result = response.json()
-        print("Setup result:", result)
-        return result
-
-
-# Health check
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "bot": "bookhotel"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url, headers=headers, data=data, files=files
+            )
+            if response.status_code == 200:
+                print("Audio sent successfully ✅")
+            else:
+                print(f"Audio ERROR: {response.json()}")
+    except Exception as e:
+        print(f"send_audio error: {e}")
