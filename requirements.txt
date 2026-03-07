@@ -6,3 +6,5 @@ langdetect
 gTTS
 SpeechRecognition
 pydub
+numpy
+noisereduce
