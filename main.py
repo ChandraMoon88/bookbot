@@ -1,21 +1,22 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mybot123")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+print(f"TOKEN LOADED: {PAGE_ACCESS_TOKEN[:20] if PAGE_ACCESS_TOKEN else 'NOT FOUND!'}")
+
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 import httpx
-import os
 import json
 from autotranslator import (
     detect_language, get_user_language, set_user_language,
     translate_to, translate_to_english, text_to_speech_bytes,
     speech_to_text, download_audio
 )
-from dotenv import load_dotenv
-load_dotenv()
 
 app = FastAPI()
-
-# ✅ SAFE — reads from environment
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "mybot123")
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
 WELCOME_MESSAGE = (
     "Welcome to BookBot!\n\n"
@@ -143,6 +144,11 @@ async def reply_with_translation(sender_id: str, english_text: str):
 
 
 async def send_text(recipient_id: str, message_text: str):
+    # Check token exists
+    if not PAGE_ACCESS_TOKEN:
+        print("ERROR: PAGE_ACCESS_TOKEN is not set!")
+        return
+        
     url = "https://graph.facebook.com/v17.0/me/messages"
     headers = {
         "Content-Type": "application/json",
@@ -152,13 +158,16 @@ async def send_text(recipient_id: str, message_text: str):
         "recipient": {"id": recipient_id},
         "message": {"text": message_text}
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload)
-        result = response.json()
-        if response.status_code == 200:
-            print("Text sent successfully")
-        else:
-            print(f"ERROR sending text [HTTP {response.status_code}]:", result)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            result = response.json()
+            if response.status_code == 200:
+                print("Text sent successfully")
+            else:
+                print(f"ERROR sending text [HTTP {response.status_code}]:", result)
+    except Exception as e:
+        print(f"ERROR in send_text: {e}")
 
 
 async def send_audio(recipient_id: str, audio_bytes: bytes):
