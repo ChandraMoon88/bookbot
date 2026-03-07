@@ -182,28 +182,34 @@ def get_edge_voice(lang_code: str) -> str:
 
 
 def text_to_speech_bytes(text: str, lang: str) -> bytes:
-    """Convert text to speech using Edge TTS — no rate limits, 100+ languages."""
+    """Convert text to speech using Edge TTS — no rate limits, 100+ languages.
+
+    Edge TTS is async-only. When called from inside FastAPI/Uvicorn's running
+    event loop, neither asyncio.run() nor loop.run_until_complete() work.
+    The fix: run the coroutine in a worker thread that owns its own event loop,
+    fully isolated from Uvicorn's loop.
+    """
+    import concurrent.futures
+
     voice = get_edge_voice(lang)
-    try:
-        # Edge TTS requires async — run in event loop
-        audio_bytes = asyncio.run(_edge_tts_generate(text, voice))
-        if audio_bytes:
-            print(f"Edge TTS success [{lang}] voice={voice}")
-            return audio_bytes
-    except RuntimeError:
-        # If event loop already running (inside async context)
+
+    def _run_in_thread() -> bytes:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            audio_bytes = loop.run_until_complete(
-                _edge_tts_generate(text, voice)
-            )
-            return audio_bytes
+            return loop.run_until_complete(_edge_tts_generate(text, voice))
         finally:
             loop.close()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            audio_bytes = executor.submit(_run_in_thread).result()
+        if audio_bytes:
+            print(f"Edge TTS success [{lang}] voice={voice}")
+        return audio_bytes
     except Exception as e:
         print(f"Edge TTS error [{lang}]: {e}")
-    return b""
+        return b""
 
 
 async def _edge_tts_generate(text: str, voice: str) -> bytes:
