@@ -335,11 +335,9 @@ def _get_whisper() -> WhisperModel:
     if _whisper_model is None:
         print("Loading Whisper 'small' model (first request only)…")
         _whisper_model = WhisperModel(
-            "small",
-            device="cpu",
-            compute_type="int8",
-            download_root="/app/.cache/whisper"   # ← add this
-        )
+                "small", device="cpu", compute_type="int8",
+                download_root="/app/.cache/whisper"
+            )
         print("Whisper model ready.")
     return _whisper_model
 
