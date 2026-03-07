@@ -75,23 +75,20 @@ async def receive_message(request: Request):
                         audio_url = audio_attachment["payload"]["url"]
                         print(f"Voice message from {sender_id}: {audio_url}")
 
-                        lang = get_user_language(sender_id) or "en"
                         audio_bytes = await download_audio(audio_url, PAGE_ACCESS_TOKEN)
-                        user_message = speech_to_text(audio_bytes, lang)
+                        # Whisper returns (transcript, detected_language) in one shot —
+                        # no locale probing, no hardcoded language lists.
+                        user_message, detected = speech_to_text(audio_bytes)
 
                         if not user_message:
                             await send_text(
                                 sender_id,
-                                "Sorry, I couldn't understand that voice message. Please try typing."
+                                "Sorry, I couldn't understand that voice message. Please try again."
                             )
                             continue
 
-                        print(f"Transcribed voice [{sender_id}]: {user_message}")
-
-                        # Always re-detect language from transcribed text
-                        detected = detect_language(user_message)
                         set_user_language(sender_id, detected)
-                        print(f"Language detected for {sender_id}: {detected}")
+                        print(f"Whisper [{sender_id}]: lang={detected}, text='{user_message}'")
 
                     else:
                         # Text input
