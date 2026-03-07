@@ -46,13 +46,19 @@ async def process_message(request: Request):
                 return {
                     "text": "Sorry, could not understand voice.",
                     "audio_b64": None,
-                    "lang": "en"
+                    "lang": stored_lang or "en"
                 }
             set_user_language(sender_id, detected)
         else:
             user_message = data.get("message", "")
+            stored_lang = get_user_language(sender_id)
             detected = detect_language(user_message)
-            set_user_language(sender_id, detected)
+            # For short words (≤6 chars), langdetect is unreliable.
+            # Trust the stored language instead to avoid "book" → Afrikaans etc.
+            if stored_lang and len(user_message.strip()) <= 6:
+                detected = stored_lang
+            else:
+                set_user_language(sender_id, detected)
 
         # Translate to English for intent
         english_message = translate_to_english(user_message, detected)
