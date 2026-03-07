@@ -182,28 +182,33 @@ def get_edge_voice(lang_code: str) -> str:
 
 
 def text_to_speech_bytes(text: str, lang: str) -> bytes:
-    """Convert text to speech using Edge TTS — no rate limits, 100+ languages."""
+    """Convert text to speech using Edge TTS — no rate limits, 100+ languages.
+
+    Edge TTS is async-only. asyncio.run() and loop.run_until_complete() both
+    fail inside Uvicorn's running event loop. Fix: run the coroutine in a
+    worker thread that owns its own isolated event loop.
+    """
+    import concurrent.futures
+
     voice = get_edge_voice(lang)
-    try:
-        # Edge TTS requires async — run in event loop
-        audio_bytes = asyncio.run(_edge_tts_generate(text, voice))
-        if audio_bytes:
-            print(f"Edge TTS success [{lang}] voice={voice}")
-            return audio_bytes
-    except RuntimeError:
-        # If event loop already running (inside async context)
+
+    def _run_in_thread() -> bytes:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            audio_bytes = loop.run_until_complete(
-                _edge_tts_generate(text, voice)
-            )
-            return audio_bytes
+            return loop.run_until_complete(_edge_tts_generate(text, voice))
         finally:
             loop.close()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            audio_bytes = executor.submit(_run_in_thread).result()
+        if audio_bytes:
+            print(f"Edge TTS success [{lang}] voice={voice}")
+        return audio_bytes
     except Exception as e:
         print(f"Edge TTS error [{lang}]: {e}")
-    return b""
+        return b""
 
 
 async def _edge_tts_generate(text: str, voice: str) -> bytes:
@@ -331,13 +336,12 @@ _whisper_model: WhisperModel | None = None
 
 
 def _get_whisper() -> WhisperModel:
+    """Load the Whisper model once and reuse it for all requests."""
     global _whisper_model
     if _whisper_model is None:
         print("Loading Whisper 'small' model (first request only)…")
-        _whisper_model = WhisperModel(
-                "small", device="cpu", compute_type="int8",
-                download_root="/app/.cache/whisper"
-            )
+        # int8 quantisation: ~2× faster on CPU with no accuracy loss for STT
+        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8", download_root="/app/.cache/whisper")
         print("Whisper model ready.")
     return _whisper_model
 
@@ -382,13 +386,12 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
     """
     Transcribe audio with Whisper and return (transcript, detected_lang_code).
 
-    lang_hint: previously confirmed language for this user. When provided,
-    Whisper is first run in auto-detect mode. If its confidence is below
-    CONFIDENCE_THRESHOLD the hint is trusted and a second pass is run with
-    the language pinned — this prevents the small model from mis-identifying
-    low-resource languages (e.g. Telugu being transcribed as Portuguese/Russian).
+    lang_hint: previously confirmed language for this user. When provided and
+    Whisper auto-detect confidence is below 0.75, a second pass is run with the
+    language pinned — prevents mis-identification of low-resource languages
+    (e.g. Telugu being transcribed as Portuguese or Russian).
     """
-    CONFIDENCE_THRESHOLD = 0.75  # below this, prefer the stored user language
+    CONFIDENCE_THRESHOLD = 0.75
 
     tmp_path = None
     try:
@@ -400,7 +403,7 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
 
         model = _get_whisper()
 
-        # --- First pass: always auto-detect so we can inspect confidence ---
+        # First pass: auto-detect
         segments, info = model.transcribe(
             tmp_path,
             beam_size=5,
@@ -417,11 +420,9 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
             f"(prob={prob:.2f}), text='{text}'"
         )
 
-        # --- Second pass: pin to hint when auto-detect is uncertain ---
+        # Second pass: pin to hint when auto-detect is uncertain
         if lang_hint and lang_hint != "en" and prob < CONFIDENCE_THRESHOLD and detected_lang != lang_hint:
-            print(
-                f"Low confidence ({prob:.2f}) — re-transcribing with pinned lang='{lang_hint}'"
-            )
+            print(f"Low confidence ({prob:.2f}) — re-transcribing with pinned lang='{lang_hint}'")
             segments2, info2 = model.transcribe(
                 tmp_path,
                 beam_size=5,
@@ -430,10 +431,7 @@ def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[st
                 vad_parameters=dict(min_silence_duration_ms=500),
             )
             text2 = " ".join(seg.text.strip() for seg in segments2).strip()
-            print(
-                f"Whisper STT (pinned={lang_hint}): "
-                f"prob={info2.language_probability:.2f}, text='{text2}'"
-            )
+            print(f"Whisper STT (pinned={lang_hint}): prob={info2.language_probability:.2f}, text='{text2}'")
             if text2:
                 return text2, lang_hint
 

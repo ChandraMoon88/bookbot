@@ -40,8 +40,6 @@ async def process_message(request: Request):
         if message_type == "voice":
             audio_b64 = data.get("audio_b64")
             audio_bytes = base64.b64decode(audio_b64)
-            # Pass stored language as hint — helps Whisper with low-resource
-            # languages (Telugu, Tamil, etc.) it may otherwise mis-identify
             stored_lang = get_user_language(sender_id)
             user_message, detected = speech_to_text(audio_bytes, lang_hint=stored_lang)
             if not user_message:
