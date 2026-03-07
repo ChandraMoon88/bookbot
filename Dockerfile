@@ -9,17 +9,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ctranslate2 bundles its own libctranslate2*.so in a .libs/ subdirectory
-# inside the wheel — patchelf must search the full site-packages tree.
-RUN find /usr/local/lib/python3.10/site-packages -name "*.so*" -exec patchelf --clear-execstack {} \; 2>/dev/null || true
+# Clear executable stack flag from ctranslate2 bundled libs
+RUN find /usr/local/lib/python3.10/site-packages -name "*.so*" \
+    -exec patchelf --clear-execstack {} \; 2>/dev/null || true
 
-# Verify the flag is gone before proceeding
 RUN python -c "import ctranslate2; print('ctranslate2 OK:', ctranslate2.__version__)"
 
 COPY . .
 
 RUN python download_model.py
 
+# Catch any import-time crash — shows exact error in build logs
 RUN python -c "import processor; print('=== Import check OK ===')"
 
 EXPOSE 7860
