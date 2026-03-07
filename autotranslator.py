@@ -1,5 +1,7 @@
 import io
 import httpx
+import numpy as np
+import noisereduce as nr
 from langdetect import detect_langs, DetectorFactory
 from deep_translator import GoogleTranslator
 from gtts import gTTS
@@ -362,30 +364,79 @@ def _try_locales(audio_data, locales: list) -> tuple:
     return best_text, best_conf, best_locale
 
 
+def preprocess_audio(audio_bytes: bytes) -> AudioSegment:
+    """
+    Clean audio before STT:
+    - Convert to mono 16 kHz (optimal for speech recognition)
+    - Normalize loudness so soft/loud voices both work
+    - Spectral noise reduction to filter background noise,
+      wind, AC hum, crowd sounds, etc.
+    """
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        # Mono + 16 kHz is the standard for all STT engines
+        audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+        # Normalize loudness
+        audio = audio.normalize()
+
+        # Convert to float32 numpy array for noise reduction
+        samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+
+        # Non-stationary noise reduction — handles crowd, wind, AC, traffic
+        cleaned = nr.reduce_noise(
+            y=samples,
+            sr=16000,
+            stationary=False,    # adapts to changing background noise
+            prop_decrease=0.85,  # remove 85 % of detected noise
+            n_fft=512,
+            win_length=512,
+            hop_length=128,
+        )
+
+        # Rebuild AudioSegment from cleaned samples
+        audio = AudioSegment(
+            cleaned.astype(np.int16).tobytes(),
+            frame_rate=16000,
+            sample_width=2,
+            channels=1,
+        )
+        # Final normalize after noise reduction
+        audio = audio.normalize()
+        return audio
+
+    except Exception as e:
+        print(f"Audio preprocessing error (using raw): {e}")
+        # Fallback: basic conversion without noise reduction
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        return audio.set_channels(1).set_frame_rate(16000).set_sample_width(2).normalize()
+
+
 def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
     recognizer = sr.Recognizer()
-    recognizer.energy_threshold = 200
+    recognizer.energy_threshold = 150        # catch very soft speech
     recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 1.5
+    recognizer.pause_threshold = 1.5         # don't cut off slow speakers
 
     try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        # Step 1 — clean the audio (denoise + normalize + mono + 16kHz)
+        audio = preprocess_audio(audio_bytes)
+
         wav_io = io.BytesIO()
-        audio_segment.export(wav_io, format="wav")
+        audio.export(wav_io, format="wav")
         wav_io.seek(0)
 
         with sr.AudioFile(wav_io) as source:
             audio_data = recognizer.record(source)
 
+        # Step 2 — multi-locale probing to find the best language match
         if lang_code == "en":
             # Language unknown — probe all common locales for best match
             text, conf, locale = _try_locales(audio_data, PROBE_LOCALES)
         else:
-            # Known language — try it first, fall back to en-US if low confidence
+            # Known language — try it first, fall back if low confidence
             known_locale = get_speech_locale(lang_code)
             text, conf, locale = _try_locales(audio_data, [known_locale, "en-US"])
             if conf < 0.5:
-                # Still low confidence — do a full probe
                 text2, conf2, locale2 = _try_locales(audio_data, PROBE_LOCALES)
                 if conf2 > conf:
                     text, conf, locale = text2, conf2, locale2
