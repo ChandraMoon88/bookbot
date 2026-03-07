@@ -20,7 +20,7 @@ WELCOME_MESSAGE = (
     "- Search & book hotel rooms\n"
     "- Check availability\n"
     "- Manage your reservations\n\n"
-    "Type 'book' to start a new booking or 'help' to see all options."
+    "Type or Voice 'book' to start a new booking or 'help' to see all options."
 )
 
 GREETING_KEYWORDS = {
@@ -107,7 +107,8 @@ async def receive_message(request: Request):
                         print(f"Language detected for {sender_id}: {detected}")
 
                     # Translate user message to English for intent detection
-                    english_message = translate_to_english(user_message)
+                    # Passing the detected language avoids transliteration
+                    english_message = translate_to_english(user_message, detected)
                     print(f"English intent [{sender_id}]: {english_message}")
 
                     lowered = english_message.strip().lower()

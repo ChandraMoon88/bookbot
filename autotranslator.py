@@ -275,12 +275,18 @@ def detect_language(text: str) -> str:
         return "en"
 
 
-def translate_to_english(text: str) -> str:
-    """Translate any text to English for intent/greeting detection."""
+def translate_to_english(text: str, source_lang: str = "auto") -> str:
+    """Translate any text to English for intent/greeting detection.
+    Passing source_lang (e.g. 'te', 'ta', 'hi') avoids transliteration and
+    forces Google Translate to return an actual English equivalent."""
     try:
-        return GoogleTranslator(source="auto", target="en").translate(text)
+        src = source_lang if source_lang and source_lang != "en" else "auto"
+        return GoogleTranslator(source=src, target="en").translate(text)
     except Exception:
-        return text
+        try:
+            return GoogleTranslator(source="auto", target="en").translate(text)
+        except Exception:
+            return text
 
 
 def get_user_language(sender_id: str):
@@ -428,18 +434,28 @@ def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
         with sr.AudioFile(wav_io) as source:
             audio_data = recognizer.record(source)
 
-        # Step 2 — multi-locale probing to find the best language match
-        if lang_code == "en":
-            # Language unknown — probe all common locales for best match
-            text, conf, locale = _try_locales(audio_data, PROBE_LOCALES)
-        else:
-            # Known language — try it first, fall back if low confidence
+        # Step 2 — always probe all common locales for the best match.
+        # If the user has an established language, put that locale first so it
+        # is tried before the early-exit threshold fires for that language.
+        # All other PROBE_LOCALES are still checked so the user can freely
+        # switch languages by voice (e.g. Tamil → Telugu → English).
+        if lang_code and lang_code != "en":
             known_locale = get_speech_locale(lang_code)
-            text, conf, locale = _try_locales(audio_data, [known_locale, "en-US"])
-            if conf < 0.5:
-                text2, conf2, locale2 = _try_locales(audio_data, PROBE_LOCALES)
-                if conf2 > conf:
-                    text, conf, locale = text2, conf2, locale2
+            locales = [known_locale] + [l for l in PROBE_LOCALES if l != known_locale]
+        else:
+            locales = PROBE_LOCALES
+
+        text, conf, locale = _try_locales(audio_data, locales)
+
+        # Step 3 — English bias: short ambiguous words like "hello" can score
+        # higher on Indian-language STT (loan-word effect).  If a non-English
+        # locale won, re-run English STT and prefer English if it is within
+        # 5 percentage points — this reliably fixes "hello" → Tamil misfire.
+        if locale and not locale.startswith("en"):
+            en_text, en_conf, _ = _try_locales(audio_data, ["en-US"])
+            if en_text and en_conf >= conf - 0.05:
+                text, conf, locale = en_text, en_conf, "en-US"
+                print(f"STT English bias applied: conf={en_conf:.2f}, text='{en_text}'")
 
         print(f"STT best: locale={locale}, conf={conf:.2f}, text='{text}'")
         return text
