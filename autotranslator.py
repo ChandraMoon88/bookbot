@@ -339,9 +339,29 @@ PROBE_LOCALES = [
     "ru-RU", "ja-JP", "ko-KR", "zh-CN",
 ]
 
+# Top 8 locales probed without early exit so the globally best locale wins.
+# Keeps the probe count small (≈ 8 API calls) while covering all major
+# Indian languages + English.
+TOP_LOCALES = [
+    "en-US", "hi-IN", "te-IN", "ta-IN", "kn-IN", "ml-IN",
+    "bn-IN", "mr-IN",
+]
 
-def _try_locales(audio_data, locales: list) -> tuple:
-    """Try each locale with show_all, return (best_text, best_confidence, best_locale)."""
+# Short English words that are unambiguous regardless of what Indian-language
+# STT returns (e.g. "hello" → Tamil "ஹலோ").  When en-US returns one of
+# these, it overrides a non-English winner.
+ENGLISH_TRIGGER_WORDS = {
+    "hi", "hello", "hey", "help", "book", "start", "yes", "no",
+    "cancel", "back", "ok", "okay", "stop", "menu",
+}
+
+
+def _try_locales(audio_data, locales: list, early_exit: bool = True) -> tuple:
+    """Try each locale with show_all, return (best_text, best_confidence, best_locale).
+
+    When early_exit=False all locales are tried so the globally best match
+    wins.  Use early_exit=True only when a quick best-effort result is enough.
+    """
     recognizer = sr.Recognizer()
     best_text, best_conf, best_locale = "", -1.0, ""
     for locale in locales:
@@ -353,15 +373,21 @@ def _try_locales(audio_data, locales: list) -> tuple:
                 alts = raw.get("alternative", [])
                 if alts:
                     text = alts[0].get("transcript", "")
-                    conf = float(alts[0].get("confidence", 0.5))
+                    # Default 0.88: when Google omits the confidence field the
+                    # result is still a solid match — treat it as 0.88 rather
+                    # than 0.5 so it can beat genuinely lower-confidence hits
+                    # from other locales, while still being beatable by any
+                    # locale that returns an explicit confidence > 0.88.
+                    conf = float(alts[0].get("confidence", 0.88))
                     if text and conf > best_conf:
                         best_conf, best_text, best_locale = conf, text, locale
-                    if best_conf >= 0.85:   # confident enough — stop probing
+                    if early_exit and best_conf >= 0.85:
                         break
             elif isinstance(raw, str) and raw:
                 best_text, best_locale = raw, locale
                 best_conf = 0.7
-                break
+                if early_exit:
+                    break
         except sr.UnknownValueError:
             continue
         except Exception as e:
@@ -434,28 +460,34 @@ def speech_to_text(audio_bytes: bytes, lang_code: str = "en") -> str:
         with sr.AudioFile(wav_io) as source:
             audio_data = recognizer.record(source)
 
-        # Step 2 — always probe all common locales for the best match.
-        # If the user has an established language, put that locale first so it
-        # is tried before the early-exit threshold fires for that language.
-        # All other PROBE_LOCALES are still checked so the user can freely
-        # switch languages by voice (e.g. Tamil → Telugu → English).
+        # Step 2 — probe TOP_LOCALES WITHOUT early exit so every locale is
+        # compared and the one with the globally highest confidence wins.
+        # Putting the user's known locale first maximises its chance when
+        # confidence values are tied at the default (0.88).
         if lang_code and lang_code != "en":
             known_locale = get_speech_locale(lang_code)
-            locales = [known_locale] + [l for l in PROBE_LOCALES if l != known_locale]
+            locales = [known_locale] + [l for l in TOP_LOCALES if l != known_locale]
         else:
-            locales = PROBE_LOCALES
+            locales = TOP_LOCALES
 
-        text, conf, locale = _try_locales(audio_data, locales)
+        text, conf, locale = _try_locales(audio_data, locales, early_exit=False)
 
-        # Step 3 — English bias: short ambiguous words like "hello" can score
-        # higher on Indian-language STT (loan-word effect).  If a non-English
-        # locale won, re-run English STT and prefer English if it is within
-        # 5 percentage points — this reliably fixes "hello" → Tamil misfire.
+        # For languages outside TOP_LOCALES (e.g. French, Arabic) fall back
+        # to the full PROBE_LOCALES with early exit if TOP_LOCALES found nothing.
+        if not text:
+            remaining = [l for l in PROBE_LOCALES if l not in locales]
+            if remaining:
+                text, conf, locale = _try_locales(audio_data, remaining, early_exit=True)
+
+        # Step 3 — English trigger-word bias.
+        # Short common English words (hello, help, book …) can score higher
+        # confidence on Indian-language STT because they are loan words.
+        # If en-US returns one of these known English words, always prefer it.
         if locale and not locale.startswith("en"):
-            en_text, en_conf, _ = _try_locales(audio_data, ["en-US"])
-            if en_text and en_conf >= conf - 0.05:
+            en_text, en_conf, _ = _try_locales(audio_data, ["en-US"], early_exit=False)
+            if en_text and en_text.strip().lower() in ENGLISH_TRIGGER_WORDS:
                 text, conf, locale = en_text, en_conf, "en-US"
-                print(f"STT English bias applied: conf={en_conf:.2f}, text='{en_text}'")
+                print(f"STT English trigger applied: conf={en_conf:.2f}, text='{en_text}'")
 
         print(f"STT best: locale={locale}, conf={conf:.2f}, text='{text}'")
         return text
