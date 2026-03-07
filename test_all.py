@@ -169,7 +169,7 @@ def test_redis():
         log("Redis URL configured", False, "REDIS_URL env var not set — skipping")
         return
     try:
-        import redis as redis_lib
+        import redis_client as redis_lib
         # redis-py v4+ uses Redis.from_url; fallback for older versions
         if hasattr(redis_lib, "from_url"):
             client = redis_lib.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
