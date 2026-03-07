@@ -1,7 +1,7 @@
 FROM python:3.10-slim
 
 RUN apt-get update && apt-get install -y \
-    ffmpeg gcc g++ libsndfile1 \
+    ffmpeg gcc g++ libsndfile1 patchelf \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -9,13 +9,15 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# HF Spaces blocks shared libs that request executable stack.
+# ctranslate2 ships with this flag set — clear it with patchelf.
+RUN find /usr/local/lib/python3.10/site-packages/ctranslate2 -name "*.so*" \
+    | xargs -I{} patchelf --clear-execstack {}
+
 COPY . .
 
-# Download Whisper model at build time into a fixed path
 RUN python download_model.py
 
-# This will FAIL THE BUILD (showing the exact error) if any import is broken
-# Remove this line once confirmed working
 RUN python -c "import processor; print('=== Import check OK ===')"
 
 EXPOSE 7860
