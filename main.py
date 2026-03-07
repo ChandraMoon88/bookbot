@@ -8,6 +8,8 @@ from autotranslator import (
     translate_to, translate_to_english, text_to_speech_bytes,
     speech_to_text, download_audio
 )
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI()
 
