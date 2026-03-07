@@ -331,12 +331,15 @@ _whisper_model: WhisperModel | None = None
 
 
 def _get_whisper() -> WhisperModel:
-    """Load the Whisper model once and reuse it for all requests."""
     global _whisper_model
     if _whisper_model is None:
         print("Loading Whisper 'small' model (first request only)…")
-        # int8 quantisation: ~2× faster on CPU with no accuracy loss for STT
-        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        _whisper_model = WhisperModel(
+            "small",
+            device="cpu",
+            compute_type="int8",
+            download_root="/app/.cache/whisper"   # ← add this
+        )
         print("Whisper model ready.")
     return _whisper_model
 
