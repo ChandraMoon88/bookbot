@@ -11,7 +11,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Download Whisper model at build time into a fixed path
 RUN python download_model.py
+
+# This will FAIL THE BUILD (showing the exact error) if any import is broken
+# Remove this line once confirmed working
+RUN python -c "import processor; print('=== Import check OK ===')"
 
 EXPOSE 7860
 
