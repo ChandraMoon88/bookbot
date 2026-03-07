@@ -84,7 +84,7 @@ MMS_PRELOAD = [
     "tam",   # Tamil
     "fra",   # French
     "spa",   # Spanish
-    "arb",   # Arabic
+    "ara",   # Arabic   (mms-tts-ara — not arb)
 ]
 
 print(f"\n[4/4] Downloading MMS-TTS models for: {MMS_PRELOAD}")

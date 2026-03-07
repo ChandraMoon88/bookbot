@@ -19,7 +19,7 @@ soundfile>=0.12.1       # WAV I/O for SpeechT5 / MMS-TTS output
 
 # ── STT  (Whisper — unchanged) ────────────────────────────────────────────────
 faster-whisper==1.0.3
-ctranslate2==4.3.1
+ctranslate2>=4.6.1
 
 # ── Audio processing ──────────────────────────────────────────────────────────
 pydub==0.25.1

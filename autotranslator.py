@@ -191,7 +191,7 @@ MMS_LANG_MAP: dict[str, str] = {
     "ga":    "gle",
     "mt":    "mlt",
     "tr":    "tur",
-    "ar":    "arb",
+    "ar":    "ara",   # facebook/mms-tts-ara  (arb is not a valid MMS model ID)
     "fa":    "pes",
     "he":    "heb",
     "iw":    "heb",
