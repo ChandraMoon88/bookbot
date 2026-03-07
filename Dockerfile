@@ -20,7 +20,16 @@ COPY . .
 
 RUN python download_model.py
 
-RUN python -c "import processor; print('=== Import check OK ===')"
+# Simulate runtime environment — expose the crash with verbose output
+RUN python -c "
+import traceback, sys
+try:
+    import processor
+    print('OK')
+except Exception as e:
+    traceback.print_exc()
+    sys.exit(1)
+"
 
 EXPOSE 7860
 
