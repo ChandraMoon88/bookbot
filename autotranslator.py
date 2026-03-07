@@ -1,13 +1,13 @@
 import io
 import os
-import asyncio
+
 import tempfile
 import httpx
 import numpy as np
 import noisereduce as nr
 from langdetect import detect_langs, DetectorFactory
 from deep_translator import GoogleTranslator
-import edge_tts
+from gtts import gTTS
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 
@@ -181,46 +181,67 @@ def get_edge_voice(lang_code: str) -> str:
     return "en-US-JennyNeural"
 
 
+# gTTS language code map — subset covering languages with non-standard codes
+GTTS_LANG_MAP = {
+    "iw": "iw",    # Hebrew
+    "zh-CN": "zh-CN",
+    "zh-TW": "zh-TW",
+    "zh-cn": "zh-CN",
+    "zh-tw": "zh-TW",
+    "fil": "tl",   # Filipino → Tagalog code for gTTS
+    "jv": "jw",    # Javanese
+    "nb": "no",    # Norwegian Bokmål
+    "or": "en",    # Odia not supported → fallback English
+    "mn": "en",    # Mongolian not supported → fallback English
+    "km": "km",
+    "lo": "lo",
+    "my": "my",
+    "si": "si",
+    "ne": "ne",
+    "ky": "en",    # Kyrgyz not supported → fallback
+    "kk": "en",    # Kazakh not supported → fallback
+    "tk": "en",
+    "tt": "en",
+    "wuu": "zh-CN",
+    "yue": "zh-TW",
+    "jw": "jw",
+}
+
+def get_gtts_lang(lang_code: str) -> str:
+    """Map internal lang code to gTTS-compatible code."""
+    code = lang_code.lower()
+    if code in GTTS_LANG_MAP:
+        return GTTS_LANG_MAP[code]
+    base = code.split("-")[0]
+    return base
+
+
 def text_to_speech_bytes(text: str, lang: str) -> bytes:
-    """Convert text to speech using Edge TTS — no rate limits, 100+ languages.
-
-    Runs the async coroutine in an isolated worker thread so it never
-    conflicts with Uvicorn's running event loop.
+    """Convert text to speech using gTTS (Google TTS).
+    Free, no API key, works from any server IP including HF Spaces.
     """
-    import concurrent.futures
-
-    voice = get_edge_voice(lang)
-
-    def _run_in_thread() -> bytes:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(_edge_tts_generate(text, voice))
-        finally:
-            loop.close()
-
+    gtts_lang = get_gtts_lang(lang)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            audio_bytes = executor.submit(_run_in_thread).result(timeout=15)
-        if audio_bytes:
-            print(f"Edge TTS success [{lang}] voice={voice} bytes={len(audio_bytes)}")
-        else:
-            print(f"Edge TTS returned empty bytes [{lang}]")
+        tts = gTTS(text=text, lang=gtts_lang, slow=False)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        audio_bytes = buf.read()
+        print(f"gTTS success [{lang}→{gtts_lang}] bytes={len(audio_bytes)}")
         return audio_bytes
     except Exception as e:
-        print(f"Edge TTS error [{lang}]: {e}")
+        print(f"gTTS error [{lang}→{gtts_lang}]: {e}")
+        # Fallback to English if language not supported
+        if gtts_lang != "en":
+            try:
+                tts = gTTS(text=text, lang="en", slow=False)
+                buf = io.BytesIO()
+                tts.write_to_fp(buf)
+                buf.seek(0)
+                return buf.read()
+            except Exception as e2:
+                print(f"gTTS English fallback error: {e2}")
         return b""
-
-
-async def _edge_tts_generate(text: str, voice: str) -> bytes:
-    """Generate speech bytes using edge-tts."""
-    communicate = edge_tts.Communicate(text, voice)
-    buf = io.BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            buf.write(chunk["data"])
-    buf.seek(0)
-    return buf.read()
 
 # Unicode script → language code mapping for reliable detection of non-Latin
 # scripts in text messages (not used for voice — Whisper handles that).

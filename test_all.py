@@ -169,20 +169,16 @@ def test_redis():
         log("Redis URL configured", False, "REDIS_URL env var not set — skipping")
         return
     try:
-        import redis_client as redis_lib
-        # redis-py v4+ uses Redis.from_url; fallback for older versions
-        if hasattr(redis_lib, "from_url"):
-            client = redis_lib.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
-        else:
-            client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
-        client.setex("test:bookbot", 60, "ping")
+        import redis as redis_lib
+        client = redis_lib.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
+        client.set("test:bookbot", "ping", ex=60)
         val = client.get("test:bookbot")
-        log("Redis write",        True)
-        log("Redis read back",    val == "ping", f"got: {val}")
+        log("Redis write",     True)
+        log("Redis read back", val == "ping", f"got: {val}")
         client.delete("test:bookbot")
-        log("Redis delete",       True)
+        log("Redis delete",    True)
     except Exception as e:
-        log("Redis connection",   False, str(e))
+        log("Redis connection", False, str(e))
 
 
 # ─────────────────────────────────────────────
@@ -198,12 +194,12 @@ def test_language_persistence():
     lang1 = r1.json().get("lang")
     # Second message should still be Telugu
     r2 = httpx.post(f"{HF_PROCESSOR_URL}/process",
-                    json={"sender_id": uid, "type": "text", "message": "book"},
+                    json={"sender_id": uid, "type": "text", "message": "హోటల్ బుక్ చేయండి"},
                     timeout=30)
     lang2 = r2.json().get("lang")
     try:
         log("First message lang set to 'te'",       lang1 == "te", f"got: {lang1}")
-        log("Second message lang persists as 'te'", lang2 == "te", f"got: {lang2}")
+        log("Second Telugu message lang is 'te'",   lang2 == "te", f"got: {lang2}")
     except Exception as e:
         log("Language persistence", False, str(e))
 
