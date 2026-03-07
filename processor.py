@@ -1,3 +1,14 @@
+import traceback
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        print("Processor starting up...")
+        print("All imports successful ✅")
+    except Exception as e:
+        print(f"Startup error: {e}")
+        traceback.print_exc()
+
 from fastapi import FastAPI, Request
 from autotranslator import (
     detect_language, get_user_language, set_user_language,
