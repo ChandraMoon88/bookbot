@@ -196,6 +196,6 @@ async def setup():
 
 
 # Health check
-@app.get("/")
-def root():
-    return {"status": "Bot is running!"}
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "bot": "bookhotel"}
