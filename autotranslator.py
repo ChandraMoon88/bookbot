@@ -1,459 +1,614 @@
+"""
+autotranslator.py  —  HuggingFace-native version
+=================================================
+Replaces:
+  ❌  deep-translator  →  ✅  facebook/nllb-200-distilled-600M
+  ❌  gtts / edge-tts  →  ✅  microsoft/speecht5_tts        (English)
+                             facebook/mms-tts-{lang}        (every other language)
+
+All models run fully offline inside HF Spaces — zero external API calls.
+
+Public API is 100% unchanged (same function names / signatures as before):
+  detect_language(text)            → str
+  translate_to_english(text, src)  → str
+  translate_to(text, target)       → str
+  text_to_speech_bytes(text, lang) → bytes  (MP3)
+  speech_to_text(audio_bytes)      → (str, str)
+  get_user_language(sender_id)     → str | None
+  set_user_language(sender_id, lang)
+  download_audio(url, token)       → bytes  (async)
+"""
+
+from __future__ import annotations
+
 import io
 import os
-
 import tempfile
-import httpx
+import logging
+from typing import Optional
+
 import numpy as np
 import noisereduce as nr
+import soundfile as sf
+import torch
+import httpx
 from langdetect import detect_langs, DetectorFactory
-from deep_translator import GoogleTranslator
-from gtts import gTTS
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+    pipeline,
+    SpeechT5Processor,
+    SpeechT5ForTextToSpeech,
+    SpeechT5HifiGan,
+    VitsModel,
+)
+from datasets import load_dataset
 
+logger = logging.getLogger(__name__)
 DetectorFactory.seed = 0
 
-# Edge TTS voice map — 100+ languages
-EDGE_TTS_VOICES = {
-    # Indian Languages
-    "en": "en-US-JennyNeural",
-    "hi": "hi-IN-SwaraNeural",
-    "te": "te-IN-ShrutiNeural",
-    "ta": "ta-IN-PallaviNeural",
-    "kn": "kn-IN-SapnaNeural",
-    "ml": "ml-IN-SobhanaNeural",
-    "bn": "bn-IN-TanishaaNeural",
-    "mr": "mr-IN-AarohiNeural",
-    "gu": "gu-IN-DhwaniNeural",
-    "pa": "pa-IN-OjasveeNeural",
-    "ur": "ur-PK-UzmaNeural",
-    "or": "or-IN-SubhasiniNeural",
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGUAGE CODE MAPS
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # East Asian Languages
-    "zh-CN": "zh-CN-XiaoxiaoNeural",
-    "zh-cn": "zh-CN-XiaoxiaoNeural",
-    "zh-TW": "zh-TW-HsiaoChenNeural",
-    "zh-tw": "zh-TW-HsiaoChenNeural",
-    "zh": "zh-CN-XiaoxiaoNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "ko": "ko-KR-SunHiNeural",
-    "mn": "mn-MN-YesuiNeural",
-
-    # Southeast Asian Languages
-    "id": "id-ID-GadisNeural",
-    "ms": "ms-MY-YasminNeural",
-    "th": "th-TH-PremwadeeNeural",
-    "vi": "vi-VN-HoaiMyNeural",
-    "fil": "fil-PH-BlessicaNeural",
-    "km": "km-KH-SreymomNeural",
-    "lo": "lo-LA-KeomanyNeural",
-    "my": "my-MM-NilarNeural",
-    "jv": "jv-ID-SitiNeural",
-    "su": "su-ID-TutiNeural",
-
-    # European Languages
-    "fr": "fr-FR-DeniseNeural",
-    "de": "de-DE-KatjaNeural",
-    "es": "es-ES-ElviraNeural",
-    "pt": "pt-BR-FranciscaNeural",
-    "pt-PT": "pt-PT-RaquelNeural",
-    "it": "it-IT-ElsaNeural",
-    "ru": "ru-RU-SvetlanaNeural",
-    "pl": "pl-PL-ZofiaNeural",
-    "nl": "nl-NL-ColetteNeural",
-    "sv": "sv-SE-SofieNeural",
-    "da": "da-DK-ChristelNeural",
-    "fi": "fi-FI-NooraNeural",
-    "no": "nb-NO-PernilleNeural",
-    "nb": "nb-NO-PernilleNeural",
-    "cs": "cs-CZ-VlastaNeural",
-    "sk": "sk-SK-ViktoriaNeural",
-    "ro": "ro-RO-AlinaNeural",
-    "hu": "hu-HU-NoemiNeural",
-    "el": "el-GR-AthinaNeural",
-    "bg": "bg-BG-KalinaNeural",
-    "hr": "hr-HR-GabrijelaNeural",
-    "uk": "uk-UA-PolinaNeural",
-    "sr": "sr-RS-SophieNeural",
-    "sl": "sl-SI-PetraNeural",
-    "lt": "lt-LT-OnaNeural",
-    "lv": "lv-LV-EveritaNeural",
-    "et": "et-EE-AnuNeural",
-    "ca": "ca-ES-JoanaNeural",
-    "gl": "gl-ES-SabelaNeural",
-    "eu": "eu-ES-AinhoaNeural",
-    "mt": "mt-MT-GraceNeural",
-    "cy": "cy-GB-NiaNeural",
-    "ga": "ga-IE-OrlaNeural",
-    "is": "is-IS-GudrunNeural",
-    "mk": "mk-MK-MarijaNeural",
-    "sq": "sq-AL-AnilaNeural",
-    "bs": "bs-BA-VesnaNeural",
-    "tr": "tr-TR-EmelNeural",
-    "az": "az-AZ-BanuNeural",
-    "kk": "kk-KZ-AigulNeural",
-    "uz": "uz-UZ-MadinaNeural",
-    "ky": "ky-KG-AynaNeural",
-    "ka": "ka-GE-EkaNeural",
-    "hy": "hy-AM-AnahitNeural",
-
-    # Middle Eastern Languages
-    "ar": "ar-SA-ZariyahNeural",
-    "iw": "he-IL-HilaNeural",
-    "he": "he-IL-HilaNeural",
-    "fa": "fa-IR-DilaraNeural",
-    "ps": "ps-AF-LatifaNeural",
-
-    # African Languages
-    "af": "af-ZA-AdriNeural",
-    "sw": "sw-KE-ZuriNeural",
-    "am": "am-ET-MekdesNeural",
-    "so": "so-SO-UbaxNeural",
-    "zu": "zu-ZA-ThandoNeural",
-    "yo": "yo-NG-AdesuaNeural",
-    "ig": "ig-NG-EzinneNeural",
-    "st": "st-ZA-LeahNeural",
-    "tn": "tn-ZA-MosakiNeural",
-    "xh": "xh-ZA-NomvulaNeural",
-    "nr": "nr-ZA-SibongileNeural",
-    "ss": "ss-ZA-ThandiwéNeural",
-    "ts": "ts-ZA-HluviNeural",
-    "ve": "ve-ZA-SefatulaNeural",
-
-    # Central Asian
-    "tk": "tk-TM-AyşeNeural",
-    "tt": "tt-RU-SadiNeural",
-
-    # Others
-    "si": "si-LK-ThiliniNeural",
-    "ne": "ne-NP-HemkalaNeural",
-    "wuu": "wuu-CN-XiaotongNeural",
-    "yue": "yue-CN-XiaoMinNeural",
-    "jw": "jv-ID-SitiNeural",
-    "en-GB": "en-GB-SoniaNeural",
-    "en-AU": "en-AU-NatashaNeural",
-    "en-IN": "en-IN-NeerjaNeural",
-    "fr-CA": "fr-CA-SylvieNeural",
-    "es-MX": "es-MX-DaliaNeural",
-    "de-AT": "de-AT-IngridNeural",
-    "de-CH": "de-CH-LeniNeural",
-    "fr-BE": "fr-BE-CharlineNeural",
-    "fr-CH": "fr-CH-ArianeNeural",
-    "nl-BE": "nl-BE-DenaNeural",
-    "pt-BR": "pt-BR-FranciscaNeural",
-    "ar-EG": "ar-EG-SalmaNeural",
-    "ar-AE": "ar-AE-FatimaNeural",
-    "zh-HK": "zh-HK-HiuGaaiNeural",
+# ISO 639-1 (2-letter)  →  NLLB-200 BCP-47 tag
+NLLB_LANG_MAP: dict[str, str] = {
+    # ── Indian ───────────────────────────────────────────────────────────────
+    "en":    "eng_Latn",
+    "hi":    "hin_Deva",
+    "te":    "tel_Telu",
+    "ta":    "tam_Taml",
+    "kn":    "kan_Knda",
+    "ml":    "mal_Mlym",
+    "bn":    "ben_Beng",
+    "mr":    "mar_Deva",
+    "gu":    "guj_Gujr",
+    "pa":    "pan_Guru",
+    "ur":    "urd_Arab",
+    "or":    "ory_Orya",
+    "si":    "sin_Sinh",
+    "ne":    "npi_Deva",
+    # ── European ─────────────────────────────────────────────────────────────
+    "fr":    "fra_Latn",
+    "de":    "deu_Latn",
+    "es":    "spa_Latn",
+    "pt":    "por_Latn",
+    "it":    "ita_Latn",
+    "ru":    "rus_Cyrl",
+    "pl":    "pol_Latn",
+    "nl":    "nld_Latn",
+    "sv":    "swe_Latn",
+    "da":    "dan_Latn",
+    "fi":    "fin_Latn",
+    "no":    "nob_Latn",
+    "nb":    "nob_Latn",
+    "cs":    "ces_Latn",
+    "sk":    "slk_Latn",
+    "ro":    "ron_Latn",
+    "hu":    "hun_Latn",
+    "el":    "ell_Grek",
+    "bg":    "bul_Cyrl",
+    "hr":    "hrv_Latn",
+    "uk":    "ukr_Cyrl",
+    "sr":    "srp_Cyrl",
+    "sl":    "slv_Latn",
+    "lt":    "lit_Latn",
+    "lv":    "lvs_Latn",
+    "et":    "est_Latn",
+    "ca":    "cat_Latn",
+    "gl":    "glg_Latn",
+    "eu":    "eus_Latn",
+    "cy":    "cym_Latn",
+    "ga":    "gle_Latn",
+    "is":    "isl_Latn",
+    "mt":    "mlt_Latn",
+    # ── Middle East / Central Asia ───────────────────────────────────────────
+    "tr":    "tur_Latn",
+    "ar":    "arb_Arab",
+    "fa":    "pes_Arab",
+    "he":    "heb_Hebr",
+    "iw":    "heb_Hebr",   # legacy ISO code for Hebrew
+    "az":    "azj_Latn",
+    "kk":    "kaz_Cyrl",
+    "uz":    "uzn_Latn",
+    "ky":    "kir_Cyrl",
+    "ka":    "kat_Geor",
+    "hy":    "hye_Armn",
+    # ── East / SE Asia ───────────────────────────────────────────────────────
+    "zh":    "zho_Hans",
+    "zh-cn": "zho_Hans",
+    "zh-tw": "zho_Hant",
+    "ja":    "jpn_Jpan",
+    "ko":    "kor_Hang",
+    "id":    "ind_Latn",
+    "ms":    "zsm_Latn",
+    "th":    "tha_Thai",
+    "vi":    "vie_Latn",
+    "km":    "khm_Khmr",
+    "my":    "mya_Mymr",
+    "lo":    "lao_Laoo",
+    "mn":    "khk_Cyrl",
+    "fil":   "fil_Latn",
+    # ── Africa ───────────────────────────────────────────────────────────────
+    "af":    "afr_Latn",
+    "sw":    "swh_Latn",
+    "am":    "amh_Ethi",
+    "yo":    "yor_Latn",
+    "ig":    "ibo_Latn",
+    "zu":    "zul_Latn",
+    "xh":    "xho_Latn",
+    "so":    "som_Latn",
 }
 
-# In-memory store: sender_id -> detected language code
-user_languages: dict = {}
-
-# Dynamically fetch supported languages
-try:
-    _lang_dict = GoogleTranslator.get_supported_languages(as_dict=True)
-    TRANSLATE_LANGS = set(_lang_dict.values())
-    print(f"Translation language codes loaded: {len(TRANSLATE_LANGS)}")
-except Exception:
-    TRANSLATE_LANGS = {"en"}
-
-# Normalize language codes to deep-translator compatible codes
-LANG_NORMALIZE = {
-    "zh-cn": "zh-CN",
-    "zh-tw": "zh-TW",
-    "he": "iw",
-    "nb": "no",
+# ISO 639-1  →  MMS-TTS ISO 639-3 suffix  (model ID: facebook/mms-tts-{code})
+MMS_LANG_MAP: dict[str, str] = {
+    "en":    "eng",
+    "hi":    "hin",
+    "te":    "tel",
+    "ta":    "tam",
+    "kn":    "kan",
+    "ml":    "mal",
+    "bn":    "ben",
+    "mr":    "mar",
+    "gu":    "guj",
+    "pa":    "pan",
+    "ur":    "urd",
+    "or":    "ory",
+    "si":    "sin",
+    "ne":    "npi",
+    "fr":    "fra",
+    "de":    "deu",
+    "es":    "spa",
+    "pt":    "por",
+    "it":    "ita",
+    "ru":    "rus",
+    "pl":    "pol",
+    "nl":    "nld",
+    "sv":    "swe",
+    "da":    "dan",
+    "fi":    "fin",
+    "no":    "nor",
+    "nb":    "nor",
+    "cs":    "ces",
+    "sk":    "slk",
+    "ro":    "ron",
+    "hu":    "hun",
+    "el":    "ell",
+    "bg":    "bul",
+    "hr":    "hrv",
+    "uk":    "ukr",
+    "sr":    "srp",
+    "sl":    "slv",
+    "lt":    "lit",
+    "lv":    "lav",
+    "et":    "est",
+    "ca":    "cat",
+    "gl":    "glg",
+    "eu":    "eus",
+    "cy":    "cym",
+    "ga":    "gle",
+    "mt":    "mlt",
+    "tr":    "tur",
+    "ar":    "arb",
+    "fa":    "pes",
+    "he":    "heb",
+    "iw":    "heb",
+    "az":    "azj",
+    "kk":    "kaz",
+    "uz":    "uzn",
+    "ka":    "kat",
+    "hy":    "hye",
+    "zh":    "cmn",
+    "zh-cn": "cmn",
+    "zh-tw": "cmn",
+    "ja":    "jpn",
+    "ko":    "kor",
+    "id":    "ind",
+    "ms":    "zsm",
+    "th":    "tha",
+    "vi":    "vie",
+    "km":    "khm",
+    "my":    "mya",
+    "mn":    "khk",
+    "fil":   "fil",
+    "af":    "afr",
+    "sw":    "swh",
+    "am":    "amh",
+    "yo":    "yor",
+    "zu":    "zul",
+    "xh":    "xho",
+    "so":    "som",
 }
 
-def normalize_lang(code: str) -> str:
-    """Normalize language codes to deep-translator compatible codes."""
-    lower = code.lower()
-    return LANG_NORMALIZE.get(lower, lower)
-
-def get_edge_voice(lang_code: str) -> str:
-    """Get Edge TTS voice for language, fallback to English."""
-    code = lang_code.lower()
-    if code in EDGE_TTS_VOICES:
-        return EDGE_TTS_VOICES[code]
-    base = code.split("-")[0]
-    if base in EDGE_TTS_VOICES:
-        return EDGE_TTS_VOICES[base]
-    return "en-US-JennyNeural"
+# In-memory language store:  sender_id → ISO 639-1 code
+user_languages: dict[str, str] = {}
 
 
-# gTTS language code map — subset covering languages with non-standard codes
-GTTS_LANG_MAP = {
-    "iw": "iw",    # Hebrew
-    "zh-CN": "zh-CN",
-    "zh-TW": "zh-TW",
-    "zh-cn": "zh-CN",
-    "zh-tw": "zh-TW",
-    "fil": "tl",   # Filipino → Tagalog code for gTTS
-    "jv": "jw",    # Javanese
-    "nb": "no",    # Norwegian Bokmål
-    "or": "en",    # Odia not supported → fallback English
-    "mn": "en",    # Mongolian not supported → fallback English
-    "km": "km",
-    "lo": "lo",
-    "my": "my",
-    "si": "si",
-    "ne": "ne",
-    "ky": "en",    # Kyrgyz not supported → fallback
-    "kk": "en",    # Kazakh not supported → fallback
-    "tk": "en",
-    "tt": "en",
-    "wuu": "zh-CN",
-    "yue": "zh-TW",
-    "jw": "jw",
-}
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGUAGE DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
 
-def get_gtts_lang(lang_code: str) -> str:
-    """Map internal lang code to gTTS-compatible code."""
-    code = lang_code.lower()
-    if code in GTTS_LANG_MAP:
-        return GTTS_LANG_MAP[code]
-    base = code.split("-")[0]
-    return base
-
-
-def text_to_speech_bytes(text: str, lang: str) -> bytes:
-    """Convert text to speech using gTTS (Google TTS).
-    Free, no API key, works from any server IP including HF Spaces.
-    """
-    gtts_lang = get_gtts_lang(lang)
-    try:
-        tts = gTTS(text=text, lang=gtts_lang, slow=False)
-        buf = io.BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        audio_bytes = buf.read()
-        print(f"gTTS success [{lang}→{gtts_lang}] bytes={len(audio_bytes)}")
-        return audio_bytes
-    except Exception as e:
-        print(f"gTTS error [{lang}→{gtts_lang}]: {e}")
-        # Fallback to English if language not supported
-        if gtts_lang != "en":
-            try:
-                tts = gTTS(text=text, lang="en", slow=False)
-                buf = io.BytesIO()
-                tts.write_to_fp(buf)
-                buf.seek(0)
-                return buf.read()
-            except Exception as e2:
-                print(f"gTTS English fallback error: {e2}")
-        return b""
-
-# Unicode script → language code mapping for reliable detection of non-Latin
-# scripts in text messages (not used for voice — Whisper handles that).
-UNICODE_SCRIPT_MAP = [
-    (0x0900, 0x097F, "hi"),    # Devanagari → Hindi
-    (0x0980, 0x09FF, "bn"),    # Bengali
-    (0x0A00, 0x0A7F, "pa"),    # Gurmukhi → Punjabi
-    (0x0A80, 0x0AFF, "gu"),    # Gujarati
-    (0x0B00, 0x0B7F, "or"),    # Odia
-    (0x0B80, 0x0BFF, "ta"),    # Tamil
-    (0x0C00, 0x0C7F, "te"),    # Telugu
-    (0x0C80, 0x0CFF, "kn"),    # Kannada
-    (0x0D00, 0x0D7F, "ml"),    # Malayalam
-    (0x0D80, 0x0DFF, "si"),    # Sinhala
-    (0x0E00, 0x0E7F, "th"),    # Thai
-    (0x0E80, 0x0EFF, "lo"),    # Lao
-    (0x0F00, 0x0FFF, "bo"),    # Tibetan
-    (0x1000, 0x109F, "my"),    # Myanmar/Burmese
-    (0x10A0, 0x10FF, "ka"),    # Georgian
-    (0x1200, 0x137F, "am"),    # Ethiopic → Amharic
-    (0x1780, 0x17FF, "km"),    # Khmer
-    (0x1800, 0x18AF, "mn"),    # Mongolian
-    (0x0530, 0x058F, "hy"),    # Armenian
-    (0x0590, 0x05FF, "iw"),    # Hebrew
-    (0x0600, 0x06FF, "ar"),    # Arabic
-    (0x0750, 0x077F, "ar"),    # Arabic Supplement
-    (0x3040, 0x309F, "ja"),    # Hiragana → Japanese
-    (0x30A0, 0x30FF, "ja"),    # Katakana → Japanese
-    (0x4E00, 0x9FFF, "zh-CN"), # CJK Unified Ideographs → Chinese
-    (0xAC00, 0xD7AF, "ko"),    # Hangul → Korean
-    (0x0400, 0x04FF, None),    # Cyrillic (needs langdetect: ru/uk/bg/sr...)
+# Unicode script ranges → language code (fast, no model needed)
+_SCRIPT_RANGES: list[tuple[int, int, str | None]] = [
+    (0x0900, 0x097F, "hi"),     # Devanagari → Hindi
+    (0x0980, 0x09FF, "bn"),     # Bengali
+    (0x0A00, 0x0A7F, "pa"),     # Gurmukhi → Punjabi
+    (0x0A80, 0x0AFF, "gu"),     # Gujarati
+    (0x0B00, 0x0B7F, "or"),     # Odia
+    (0x0B80, 0x0BFF, "ta"),     # Tamil
+    (0x0C00, 0x0C7F, "te"),     # Telugu
+    (0x0C80, 0x0CFF, "kn"),     # Kannada
+    (0x0D00, 0x0D7F, "ml"),     # Malayalam
+    (0x0D80, 0x0DFF, "si"),     # Sinhala
+    (0x0E00, 0x0E7F, "th"),     # Thai
+    (0x0E80, 0x0EFF, "lo"),     # Lao
+    (0x0F00, 0x0FFF, "bo"),     # Tibetan
+    (0x1000, 0x109F, "my"),     # Myanmar / Burmese
+    (0x10A0, 0x10FF, "ka"),     # Georgian
+    (0x1200, 0x137F, "am"),     # Ethiopic → Amharic
+    (0x1780, 0x17FF, "km"),     # Khmer
+    (0x1800, 0x18AF, "mn"),     # Mongolian
+    (0x0530, 0x058F, "hy"),     # Armenian
+    (0x0590, 0x05FF, "he"),     # Hebrew
+    (0x0600, 0x06FF, "ar"),     # Arabic
+    (0x0750, 0x077F, "ar"),     # Arabic Supplement
+    (0x3040, 0x309F, "ja"),     # Hiragana
+    (0x30A0, 0x30FF, "ja"),     # Katakana
+    (0x4E00, 0x9FFF, "zh"),     # CJK → Chinese
+    (0xAC00, 0xD7AF, "ko"),     # Hangul → Korean
+    (0x0400, 0x04FF, None),     # Cyrillic — delegate to langdetect (ru/uk/bg/sr)
 ]
 
 
-def detect_script_language(text: str):
-    """Detect language from Unicode script ranges. Returns None for Latin/Cyrillic."""
-    counts = {}
+def _detect_script_language(text: str) -> str | None:
+    counts: dict[str, int] = {}
     for ch in text:
         cp = ord(ch)
-        for start, end, lang in UNICODE_SCRIPT_MAP:
+        for start, end, lang in _SCRIPT_RANGES:
             if start <= cp <= end:
-                counts[lang] = counts.get(lang, 0) + 1
+                if lang:
+                    counts[lang] = counts.get(lang, 0) + 1
                 break
     if not counts:
         return None
-    best_lang = max(counts, key=counts.__getitem__)
-    if best_lang and counts[best_lang] >= 1:
-        return best_lang
-    return None
+    return max(counts, key=counts.__getitem__)
 
 
 def detect_language(text: str) -> str:
-    """Detect language of a text string. Used for typed messages."""
-    script_lang = detect_script_language(text)
-    if script_lang:
-        return normalize_lang(script_lang)
+    """
+    Detect language of a typed message.
+    1. Unicode script ranges  (zero latency, handles all non-Latin scripts)
+    2. langdetect             (Latin / Cyrillic disambiguation)
+    Returns ISO 639-1 code, defaults to 'en'.
+    """
+    script = _detect_script_language(text)
+    if script:
+        return script
     try:
         langs = detect_langs(text)
         if langs and langs[0].prob >= 0.80:
-            return normalize_lang(langs[0].lang)
-        return "en"
+            return langs[0].lang
     except Exception:
-        return "en"
+        pass
+    return "en"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRANSLATION  —  facebook/nllb-200-distilled-600M
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NLLB_MODEL_ID = "facebook/nllb-200-distilled-600M"
+_nllb_pipe = None
+
+
+def _get_nllb():
+    """Load NLLB pipeline once; reuse on every subsequent call."""
+    global _nllb_pipe
+    if _nllb_pipe is None:
+        logger.info("Loading NLLB-200 translation model…")
+        _nllb_pipe = pipeline(
+            "translation",
+            model=_NLLB_MODEL_ID,
+            tokenizer=_NLLB_MODEL_ID,
+            device=0 if torch.cuda.is_available() else -1,
+            max_length=512,
+        )
+        logger.info("NLLB-200 ready.")
+    return _nllb_pipe
+
+
+def _nllb_code(lang: str) -> str:
+    """ISO 639-1 → NLLB BCP-47 tag. Falls back to English."""
+    code = lang.lower()
+    return (
+        NLLB_LANG_MAP.get(code)
+        or NLLB_LANG_MAP.get(code.split("-")[0], "eng_Latn")
+    )
 
 
 def translate_to_english(text: str, source_lang: str = "auto") -> str:
-    """Translate any text to English for intent/greeting detection.
-    Passing source_lang avoids transliteration and returns a real English word."""
+    """Translate any text → English using NLLB-200."""
+    if not text or not text.strip():
+        return text
+    src = (
+        source_lang
+        if source_lang and source_lang not in ("auto", "en")
+        else detect_language(text)
+    )
+    if src == "en":
+        return text
     try:
-        src = source_lang if source_lang and source_lang != "en" else "auto"
-        return GoogleTranslator(source=src, target="en").translate(text)
-    except Exception:
-        try:
-            return GoogleTranslator(source="auto", target="en").translate(text)
-        except Exception:
-            return text
-
-
-def get_user_language(sender_id: str):
-    return user_languages.get(sender_id)
-
-
-def set_user_language(sender_id: str, lang: str):
-    user_languages[sender_id] = lang
+        result = _get_nllb()(text, src_lang=_nllb_code(src), tgt_lang="eng_Latn")
+        return result[0]["translation_text"]
+    except Exception as e:
+        logger.error(f"NLLB →en error [{src}]: {e}")
+        return text
 
 
 def translate_to(text: str, target_lang: str) -> str:
-    if target_lang == "en":
+    """Translate English text → target language using NLLB-200."""
+    if not text or not text.strip() or target_lang == "en":
         return text
     try:
-        return GoogleTranslator(source="en", target=target_lang).translate(text)
+        result = _get_nllb()(
+            text, src_lang="eng_Latn", tgt_lang=_nllb_code(target_lang)
+        )
+        return result[0]["translation_text"]
     except Exception as e:
-        print(f"Translation error [{target_lang}]: {e}")
+        logger.error(f"NLLB →{target_lang} error: {e}")
         return text
 
 
-async def download_audio(url: str, access_token: str) -> bytes:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {access_token}"},
-            follow_redirects=True
+# ─────────────────────────────────────────────────────────────────────────────
+# TTS  —  SpeechT5 (English)  +  MMS-TTS (everything else)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── SpeechT5 (English) ───────────────────────────────────────────────────────
+_t5_processor: SpeechT5Processor | None = None
+_t5_model: SpeechT5ForTextToSpeech | None = None
+_t5_vocoder: SpeechT5HifiGan | None = None
+_t5_speaker_emb: torch.Tensor | None = None
+
+
+def _get_speecht5():
+    global _t5_processor, _t5_model, _t5_vocoder, _t5_speaker_emb
+    if _t5_model is None:
+        logger.info("Loading SpeechT5 TTS…")
+        _t5_processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+        _t5_model     = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
+        _t5_vocoder   = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+        # Default speaker embedding — CMU Arctic speaker index 7306
+        ds = load_dataset(
+            "Matthijs/cmu-arctic-xvectors",
+            split="validation",
+            trust_remote_code=True,
         )
-        return response.content
+        _t5_speaker_emb = torch.tensor(ds[7306]["xvector"]).unsqueeze(0)
+        logger.info("SpeechT5 ready.")
+    return _t5_processor, _t5_model, _t5_vocoder, _t5_speaker_emb
 
 
-# ---------------------------------------------------------------------------
-# Whisper STT — replaces the old Google Speech + multi-locale probing approach.
-# Whisper detects the spoken language automatically in a single pass with no
-# hardcoded locale lists, no confidence hacking, and no per-language priors.
-# ---------------------------------------------------------------------------
+def _speecht5_tts(text: str) -> bytes:
+    """English TTS — SpeechT5 + HiFiGAN vocoder → MP3 bytes."""
+    proc, model, vocoder, spk = _get_speecht5()
+    inputs = proc(text=text, return_tensors="pt")
+    with torch.no_grad():
+        speech = model.generate_speech(inputs["input_ids"], spk, vocoder=vocoder)
+    wav_buf = io.BytesIO()
+    sf.write(wav_buf, speech.numpy(), samplerate=16_000, format="WAV")
+    wav_buf.seek(0)
+    mp3_buf = io.BytesIO()
+    AudioSegment.from_wav(wav_buf).export(mp3_buf, format="mp3", bitrate="64k")
+    return mp3_buf.getvalue()
+
+
+# ── MMS-TTS (multilingual VITS) ──────────────────────────────────────────────
+_mms_cache: dict[str, tuple] = {}   # mms_code → (VitsModel, tokenizer)
+
+
+def _get_mms(mms_code: str):
+    if mms_code not in _mms_cache:
+        model_id = f"facebook/mms-tts-{mms_code}"
+        logger.info(f"Loading MMS-TTS: {model_id}")
+        tok   = AutoTokenizer.from_pretrained(model_id)
+        model = VitsModel.from_pretrained(model_id)
+        model.eval()
+        _mms_cache[mms_code] = (model, tok)
+        logger.info(f"MMS-TTS [{mms_code}] ready.")
+    return _mms_cache[mms_code]
+
+
+def _mms_tts(text: str, mms_code: str) -> bytes:
+    """Multilingual TTS — MMS-TTS VITS → MP3 bytes."""
+    model, tok = _get_mms(mms_code)
+    inputs = tok(text, return_tensors="pt")
+    with torch.no_grad():
+        waveform = model(**inputs).waveform.squeeze().cpu().numpy()
+    sr = model.config.sampling_rate   # 16 000 or 22 050 depending on language
+    wav_buf = io.BytesIO()
+    sf.write(wav_buf, waveform, samplerate=sr, format="WAV")
+    wav_buf.seek(0)
+    mp3_buf = io.BytesIO()
+    AudioSegment.from_wav(wav_buf).export(mp3_buf, format="mp3", bitrate="64k")
+    return mp3_buf.getvalue()
+
+
+def text_to_speech_bytes(text: str, lang: str) -> bytes:
+    """
+    Convert text → MP3 bytes.
+
+    Routing:
+      English → SpeechT5      (clearest quality for en)
+      Other   → MMS-TTS       (1100+ languages, same HF ecosystem)
+      Fallback → translate to English, then SpeechT5
+    """
+    if not text or not text.strip():
+        return b""
+
+    lang_lower = lang.lower()
+
+    # ── English path ─────────────────────────────────────────────────────────
+    if lang_lower.startswith("en"):
+        try:
+            logger.info("TTS: SpeechT5 (English)")
+            return _speecht5_tts(text)
+        except Exception as e:
+            logger.error(f"SpeechT5 error: {e}")
+            return b""
+
+    # ── Multilingual path ────────────────────────────────────────────────────
+    mms_code = MMS_LANG_MAP.get(lang_lower) or MMS_LANG_MAP.get(lang_lower.split("-")[0])
+    if mms_code:
+        try:
+            logger.info(f"TTS: MMS-TTS [{lang} → mms-tts-{mms_code}]")
+            return _mms_tts(text, mms_code)
+        except Exception as e:
+            logger.warning(f"MMS-TTS [{mms_code}] failed: {e} — falling back to SpeechT5")
+
+    # ── Fallback: translate → English → SpeechT5 ────────────────────────────
+    try:
+        en_text = translate_to_english(text, lang)
+        logger.info(f"TTS fallback: SpeechT5 on English translation [{lang}→en]")
+        return _speecht5_tts(en_text)
+    except Exception as e:
+        logger.error(f"TTS fallback error: {e}")
+        return b""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_user_language(sender_id: str) -> str | None:
+    return user_languages.get(sender_id)
+
+
+def set_user_language(sender_id: str, lang: str) -> None:
+    user_languages[sender_id] = lang
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUDIO DOWNLOAD  (Messenger voice messages)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def download_audio(url: str, access_token: str) -> bytes:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
+        return resp.content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHISPER STT  (unchanged — faster-whisper is already HF-native)
+# ─────────────────────────────────────────────────────────────────────────────
 
 _whisper_model: WhisperModel | None = None
 
 
 def _get_whisper() -> WhisperModel:
-    """Load the Whisper model once and reuse it for all requests."""
     global _whisper_model
     if _whisper_model is None:
-        print("Loading Whisper 'small' model (first request only)…")
-        # int8 quantisation: ~2× faster on CPU with no accuracy loss for STT
-        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8", download_root="/app/.cache/whisper")
-        print("Whisper model ready.")
+        logger.info("Loading Whisper 'small' model…")
+        _whisper_model = WhisperModel(
+            "small", device="cpu", compute_type="int8",
+            download_root="/app/.cache/whisper",
+        )
+        logger.info("Whisper ready.")
     return _whisper_model
 
 
-def preprocess_audio(audio_bytes: bytes) -> AudioSegment:
-    """
-    Prepare audio for Whisper:
-    - Convert to mono 16 kHz (Whisper's native sample rate)
-    - Normalize loudness
-    - Spectral noise reduction (handles background noise / AC hum / crowd)
-    """
-    try:
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-        audio = audio.normalize()
+def _normalize_whisper_lang(code: str) -> str:
+    _MAP = {"zh-cn": "zh", "zh-tw": "zh", "nb": "no", "iw": "he"}
+    return _MAP.get(code.lower(), code.lower())
 
+
+def preprocess_audio(audio_bytes: bytes) -> AudioSegment:
+    """Denoise + normalise before STT (handles AC hum, crowd noise, etc.)."""
+    try:
+        audio = (
+            AudioSegment.from_file(io.BytesIO(audio_bytes))
+            .set_channels(1)
+            .set_frame_rate(16_000)
+            .set_sample_width(2)
+            .normalize()
+        )
         samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
         cleaned = nr.reduce_noise(
-            y=samples,
-            sr=16000,
-            stationary=False,
-            prop_decrease=0.85,
-            n_fft=512,
-            win_length=512,
-            hop_length=128,
+            y=samples, sr=16_000, stationary=False,
+            prop_decrease=0.85, n_fft=512, win_length=512, hop_length=128,
         )
-        audio = AudioSegment(
+        return AudioSegment(
             cleaned.astype(np.int16).tobytes(),
-            frame_rate=16000,
-            sample_width=2,
-            channels=1,
-        )
-        return audio.normalize()
-
+            frame_rate=16_000, sample_width=2, channels=1,
+        ).normalize()
     except Exception as e:
-        print(f"Audio preprocessing error (using raw): {e}")
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        return audio.set_channels(1).set_frame_rate(16000).set_sample_width(2).normalize()
+        logger.warning(f"Audio preprocessing error (using raw): {e}")
+        return (
+            AudioSegment.from_file(io.BytesIO(audio_bytes))
+            .set_channels(1)
+            .set_frame_rate(16_000)
+            .set_sample_width(2)
+            .normalize()
+        )
 
 
-def speech_to_text(audio_bytes: bytes, lang_hint: str | None = None) -> tuple[str, str]:
+def speech_to_text(
+    audio_bytes: bytes,
+    lang_hint: str | None = None,
+) -> tuple[str, str]:
     """
-    Transcribe audio with Whisper and return (transcript, detected_lang_code).
+    Transcribe audio → (transcript, detected_lang_code).
 
-    lang_hint: previously confirmed language for this user. When confidence
-    is below threshold, re-runs with pinned language to avoid mis-detection
-    of low-resource languages (e.g. Telugu → Portuguese/Russian).
+    Two-pass strategy:
+      Pass 1 — auto-detect language
+      Pass 2 — re-run with pinned lang_hint when confidence < threshold
+               (prevents low-resource language mis-detection, e.g. Telugu → pt)
     """
     CONFIDENCE_THRESHOLD = 0.75
-
-    tmp_path = None
+    tmp_path: str | None = None
     try:
         audio = preprocess_audio(audio_bytes)
-
         fd, tmp_path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         audio.export(tmp_path, format="wav")
 
         model = _get_whisper()
+        VAD   = dict(min_silence_duration_ms=500)
 
-        # First pass: auto-detect
-        segments, info = model.transcribe(
-            tmp_path,
-            beam_size=5,
-            language=None,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+        # Pass 1 — auto-detect
+        segs, info = model.transcribe(
+            tmp_path, beam_size=5, language=None,
+            vad_filter=True, vad_parameters=VAD,
         )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        detected_lang = normalize_lang(info.language)
-        prob = info.language_probability
+        text     = " ".join(s.text.strip() for s in segs).strip()
+        detected = _normalize_whisper_lang(info.language)
+        prob     = info.language_probability
+        logger.info(f"Whisper auto: lang={detected} prob={prob:.2f} text='{text}'")
 
-        print(f"Whisper STT (auto): lang={detected_lang} (prob={prob:.2f}), text='{text}'")
-
-        # Second pass: pin to hint when auto-detect is uncertain
-        if lang_hint and lang_hint != "en" and prob < CONFIDENCE_THRESHOLD and detected_lang != lang_hint:
-            print(f"Low confidence ({prob:.2f}) — re-transcribing with pinned lang='{lang_hint}'")
-            segments2, info2 = model.transcribe(
+        # Pass 2 — pin to hint on low confidence
+        if (
+            lang_hint
+            and lang_hint != "en"
+            and prob < CONFIDENCE_THRESHOLD
+            and detected != lang_hint
+        ):
+            logger.info(f"Low confidence ({prob:.2f}) — retrying with lang='{lang_hint}'")
+            segs2, info2 = model.transcribe(
                 tmp_path, beam_size=5, language=lang_hint,
-                vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500),
+                vad_filter=True, vad_parameters=VAD,
             )
-            text2 = " ".join(seg.text.strip() for seg in segments2).strip()
-            print(f"Whisper STT (pinned={lang_hint}): prob={info2.language_probability:.2f}, text='{text2}'")
+            text2 = " ".join(s.text.strip() for s in segs2).strip()
+            logger.info(
+                f"Whisper pinned={lang_hint}: prob={info2.language_probability:.2f} text='{text2}'"
+            )
             if text2:
                 return text2, lang_hint
 
-        return text, detected_lang
+        return text, detected
 
     except Exception as e:
-        print(f"STT error: {e}")
+        logger.error(f"STT error: {e}")
         return "", lang_hint or "en"
 
     finally:
