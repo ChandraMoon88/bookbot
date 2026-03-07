@@ -1,22 +1,155 @@
 import io
 import os
+import asyncio
 import tempfile
 import httpx
 import numpy as np
 import noisereduce as nr
 from langdetect import detect_langs, DetectorFactory
 from deep_translator import GoogleTranslator
-from gtts import gTTS
-from gtts.lang import tts_langs
+import edge_tts
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 
 DetectorFactory.seed = 0
 
+# Edge TTS voice map — 100+ languages
+EDGE_TTS_VOICES = {
+    # Indian Languages
+    "en": "en-US-JennyNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "te": "te-IN-ShrutiNeural",
+    "ta": "ta-IN-PallaviNeural",
+    "kn": "kn-IN-SapnaNeural",
+    "ml": "ml-IN-SobhanaNeural",
+    "bn": "bn-IN-TanishaaNeural",
+    "mr": "mr-IN-AarohiNeural",
+    "gu": "gu-IN-DhwaniNeural",
+    "pa": "pa-IN-OjasveeNeural",
+    "ur": "ur-PK-UzmaNeural",
+    "or": "or-IN-SubhasiniNeural",
+
+    # East Asian Languages
+    "zh-CN": "zh-CN-XiaoxiaoNeural",
+    "zh-cn": "zh-CN-XiaoxiaoNeural",
+    "zh-TW": "zh-TW-HsiaoChenNeural",
+    "zh-tw": "zh-TW-HsiaoChenNeural",
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "mn": "mn-MN-YesuiNeural",
+
+    # Southeast Asian Languages
+    "id": "id-ID-GadisNeural",
+    "ms": "ms-MY-YasminNeural",
+    "th": "th-TH-PremwadeeNeural",
+    "vi": "vi-VN-HoaiMyNeural",
+    "fil": "fil-PH-BlessicaNeural",
+    "km": "km-KH-SreymomNeural",
+    "lo": "lo-LA-KeomanyNeural",
+    "my": "my-MM-NilarNeural",
+    "jv": "jv-ID-SitiNeural",
+    "su": "su-ID-TutiNeural",
+
+    # European Languages
+    "fr": "fr-FR-DeniseNeural",
+    "de": "de-DE-KatjaNeural",
+    "es": "es-ES-ElviraNeural",
+    "pt": "pt-BR-FranciscaNeural",
+    "pt-PT": "pt-PT-RaquelNeural",
+    "it": "it-IT-ElsaNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "pl": "pl-PL-ZofiaNeural",
+    "nl": "nl-NL-ColetteNeural",
+    "sv": "sv-SE-SofieNeural",
+    "da": "da-DK-ChristelNeural",
+    "fi": "fi-FI-NooraNeural",
+    "no": "nb-NO-PernilleNeural",
+    "nb": "nb-NO-PernilleNeural",
+    "cs": "cs-CZ-VlastaNeural",
+    "sk": "sk-SK-ViktoriaNeural",
+    "ro": "ro-RO-AlinaNeural",
+    "hu": "hu-HU-NoemiNeural",
+    "el": "el-GR-AthinaNeural",
+    "bg": "bg-BG-KalinaNeural",
+    "hr": "hr-HR-GabrijelaNeural",
+    "uk": "uk-UA-PolinaNeural",
+    "sr": "sr-RS-SophieNeural",
+    "sl": "sl-SI-PetraNeural",
+    "lt": "lt-LT-OnaNeural",
+    "lv": "lv-LV-EveritaNeural",
+    "et": "et-EE-AnuNeural",
+    "ca": "ca-ES-JoanaNeural",
+    "gl": "gl-ES-SabelaNeural",
+    "eu": "eu-ES-AinhoaNeural",
+    "mt": "mt-MT-GraceNeural",
+    "cy": "cy-GB-NiaNeural",
+    "ga": "ga-IE-OrlaNeural",
+    "is": "is-IS-GudrunNeural",
+    "mk": "mk-MK-MarijaNeural",
+    "sq": "sq-AL-AnilaNeural",
+    "bs": "bs-BA-VesnaNeural",
+    "tr": "tr-TR-EmelNeural",
+    "az": "az-AZ-BanuNeural",
+    "kk": "kk-KZ-AigulNeural",
+    "uz": "uz-UZ-MadinaNeural",
+    "ky": "ky-KG-AynaNeural",
+    "ka": "ka-GE-EkaNeural",
+    "hy": "hy-AM-AnahitNeural",
+
+    # Middle Eastern Languages
+    "ar": "ar-SA-ZariyahNeural",
+    "iw": "he-IL-HilaNeural",
+    "he": "he-IL-HilaNeural",
+    "fa": "fa-IR-DilaraNeural",
+    "ps": "ps-AF-LatifaNeural",
+
+    # African Languages
+    "af": "af-ZA-AdriNeural",
+    "sw": "sw-KE-ZuriNeural",
+    "am": "am-ET-MekdesNeural",
+    "so": "so-SO-UbaxNeural",
+    "zu": "zu-ZA-ThandoNeural",
+    "yo": "yo-NG-AdesuaNeural",
+    "ig": "ig-NG-EzinneNeural",
+    "st": "st-ZA-LeahNeural",
+    "tn": "tn-ZA-MosakiNeural",
+    "xh": "xh-ZA-NomvulaNeural",
+    "nr": "nr-ZA-SibongileNeural",
+    "ss": "ss-ZA-ThandiwéNeural",
+    "ts": "ts-ZA-HluviNeural",
+    "ve": "ve-ZA-SefatulaNeural",
+
+    # Central Asian
+    "tk": "tk-TM-AyşeNeural",
+    "tt": "tt-RU-SadiNeural",
+
+    # Others
+    "si": "si-LK-ThiliniNeural",
+    "ne": "ne-NP-HemkalaNeural",
+    "wuu": "wuu-CN-XiaotongNeural",
+    "yue": "yue-CN-XiaoMinNeural",
+    "jw": "jv-ID-SitiNeural",
+    "en-GB": "en-GB-SoniaNeural",
+    "en-AU": "en-AU-NatashaNeural",
+    "en-IN": "en-IN-NeerjaNeural",
+    "fr-CA": "fr-CA-SylvieNeural",
+    "es-MX": "es-MX-DaliaNeural",
+    "de-AT": "de-AT-IngridNeural",
+    "de-CH": "de-CH-LeniNeural",
+    "fr-BE": "fr-BE-CharlineNeural",
+    "fr-CH": "fr-CH-ArianeNeural",
+    "nl-BE": "nl-BE-DenaNeural",
+    "pt-BR": "pt-BR-FranciscaNeural",
+    "ar-EG": "ar-EG-SalmaNeural",
+    "ar-AE": "ar-AE-FatimaNeural",
+    "zh-HK": "zh-HK-HiuGaaiNeural",
+}
+
 # In-memory store: sender_id -> detected language code
 user_languages: dict = {}
 
-# Dynamically fetch all languages supported by deep-translator and gTTS at startup
+# Dynamically fetch supported languages
 try:
     _lang_dict = GoogleTranslator.get_supported_languages(as_dict=True)
     TRANSLATE_LANGS = set(_lang_dict.values())
@@ -24,37 +157,64 @@ try:
 except Exception:
     TRANSLATE_LANGS = {"en"}
 
-try:
-    TTS_LANGS = set(tts_langs().keys())
-    print(f"TTS languages loaded: {len(TTS_LANGS)}")
-except Exception:
-    TTS_LANGS = {"en"}
-
-# Normalize Whisper / langdetect codes to deep-translator compatible codes
+# Normalize language codes to deep-translator compatible codes
 LANG_NORMALIZE = {
     "zh-cn": "zh-CN",
     "zh-tw": "zh-TW",
-    "he": "iw",   # deep-translator uses 'iw' for Hebrew
-    "nb": "no",   # Norwegian Bokmål → Norwegian
+    "he": "iw",
+    "nb": "no",
 }
-
 
 def normalize_lang(code: str) -> str:
     """Normalize language codes to deep-translator compatible codes."""
     lower = code.lower()
     return LANG_NORMALIZE.get(lower, lower)
 
-
-def get_gtts_lang(lang_code: str) -> str:
-    """Return a valid gTTS language code, falling back to 'en'."""
+def get_edge_voice(lang_code: str) -> str:
+    """Get Edge TTS voice for language, fallback to English."""
     code = lang_code.lower()
-    if code in TTS_LANGS:
-        return code
+    if code in EDGE_TTS_VOICES:
+        return EDGE_TTS_VOICES[code]
     base = code.split("-")[0]
-    if base in TTS_LANGS:
-        return base
-    return "en"
+    if base in EDGE_TTS_VOICES:
+        return EDGE_TTS_VOICES[base]
+    return "en-US-JennyNeural"
 
+
+def text_to_speech_bytes(text: str, lang: str) -> bytes:
+    """Convert text to speech using Edge TTS — no rate limits, 100+ languages."""
+    voice = get_edge_voice(lang)
+    try:
+        # Edge TTS requires async — run in event loop
+        audio_bytes = asyncio.run(_edge_tts_generate(text, voice))
+        if audio_bytes:
+            print(f"Edge TTS success [{lang}] voice={voice}")
+            return audio_bytes
+    except RuntimeError:
+        # If event loop already running (inside async context)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            audio_bytes = loop.run_until_complete(
+                _edge_tts_generate(text, voice)
+            )
+            return audio_bytes
+        finally:
+            loop.close()
+    except Exception as e:
+        print(f"Edge TTS error [{lang}]: {e}")
+    return b""
+
+
+async def _edge_tts_generate(text: str, voice: str) -> bytes:
+    """Generate speech bytes using edge-tts."""
+    communicate = edge_tts.Communicate(text, voice)
+    buf = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            buf.write(chunk["data"])
+    buf.seek(0)
+    return buf.read()
 
 # Unicode script → language code mapping for reliable detection of non-Latin
 # scripts in text messages (not used for voice — Whisper handles that).
@@ -149,25 +309,6 @@ def translate_to(text: str, target_lang: str) -> str:
     except Exception as e:
         print(f"Translation error [{target_lang}]: {e}")
         return text
-
-
-def text_to_speech_bytes(text: str, lang: str) -> bytes:
-    gtts_lang = get_gtts_lang(lang)
-    # Retry up to 3 times for 429 errors
-    for attempt in range(3):
-        try:
-            tts = gTTS(text=text, lang=gtts_lang)
-            buf = io.BytesIO()
-            tts.write_to_fp(buf)
-            buf.seek(0)
-            return buf.read()
-        except Exception as e:
-            print(f"TTS attempt {attempt+1} failed [{gtts_lang}]: {e}")
-            if attempt < 2:
-                import time
-                time.sleep(2)
-    print("TTS failed after 3 attempts — skipping voice")
-    return b""
 
 
 async def download_audio(url: str, access_token: str) -> bytes:
