@@ -9,10 +9,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# HF Spaces blocks shared libs that request executable stack.
-# ctranslate2 ships with this flag set — clear it with patchelf.
-RUN find /usr/local/lib/python3.10/site-packages/ctranslate2 -name "*.so*" \
-    | xargs -I{} patchelf --clear-execstack {}
+# ctranslate2 bundles its own libctranslate2*.so in a .libs/ subdirectory
+# inside the wheel — patchelf must search the full site-packages tree.
+RUN find /usr/local/lib/python3.10/site-packages -name "*.so*" -exec patchelf --clear-execstack {} \; 2>/dev/null || true
+
+# Verify the flag is gone before proceeding
+RUN python -c "import ctranslate2; print('ctranslate2 OK:', ctranslate2.__version__)"
 
 COPY . .
 
