@@ -1,0 +1,10 @@
+# ── Render requirements (main.py webhook only) ────────────────────────────────
+# Render runs ONLY main.py — the Facebook Messenger webhook proxy.
+# It receives messages, forwards them to HF Spaces, and sends replies back.
+# NO AI libraries needed here at all (Whisper, NLLB, SpeechT5 etc. live on HF Spaces).
+
+fastapi==0.111.0
+uvicorn==0.29.0
+httpx==0.27.0
+python-dotenv==1.0.0
+python-multipart==0.0.9
