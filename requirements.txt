@@ -27,14 +27,14 @@ datasets>=2.14.0              # CMU Arctic speaker embeddings for SpeechT5
 soundfile>=0.12.1             # WAV I/O for SpeechT5 / MMS-TTS output
 
 # ── STT  (Whisper — unchanged) ────────────────────────────────────────────────
-faster-whisper==1.0.3
+faster-whisper>=1.0.3     # pin floor only; exact pin can fail on Render's pip mirror
 ctranslate2>=4.6.1
 
 # ── Audio processing ──────────────────────────────────────────────────────────
 pydub==0.25.1
 numpy>=1.24.0             # 1.26.4 not indexed on Render; allow any compatible build
 noisereduce==3.0.2
-scipy==1.13.0
+scipy>=1.13.0             # 1.13.0 not indexed on Render; allow any compatible build
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 redis==5.0.1
