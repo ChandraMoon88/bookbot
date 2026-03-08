@@ -38,7 +38,6 @@ from pydub import AudioSegment
 from transformers import (
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
-    pipeline,
     SpeechT5Processor,
     SpeechT5ForTextToSpeech,
     SpeechT5HifiGan,
@@ -300,23 +299,41 @@ def detect_language(text: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _NLLB_MODEL_ID = "facebook/nllb-200-distilled-600M"
-_nllb_pipe = None
+_nllb_tokenizer: AutoTokenizer | None = None
+_nllb_model: AutoModelForSeq2SeqLM | None = None
 
 
-def _get_nllb():
-    """Load NLLB pipeline once; reuse on every subsequent call."""
-    global _nllb_pipe
-    if _nllb_pipe is None:
+def _get_nllb() -> tuple:
+    """Load NLLB tokenizer + model once; reuse on every subsequent call.
+    Uses model directly (not pipeline) so it works in transformers v4 AND v5.
+    The transformers v5 pipeline removed the 'translation' task name entirely.
+    """
+    global _nllb_tokenizer, _nllb_model
+    if _nllb_model is None:
         logger.info("Loading NLLB-200 translation model…")
-        _nllb_pipe = pipeline(
-            "translation",
-            model=_NLLB_MODEL_ID,
-            tokenizer=_NLLB_MODEL_ID,
-            device=0 if torch.cuda.is_available() else -1,
-            max_length=512,
-        )
+        _nllb_tokenizer = AutoTokenizer.from_pretrained(_NLLB_MODEL_ID)
+        _nllb_model = AutoModelForSeq2SeqLM.from_pretrained(_NLLB_MODEL_ID)
+        _nllb_model.eval()
         logger.info("NLLB-200 ready.")
-    return _nllb_pipe
+    return _nllb_tokenizer, _nllb_model
+
+
+def _nllb_translate(text: str, src_nllb: str, tgt_nllb: str) -> str:
+    """Translate text between two NLLB BCP-47 language codes."""
+    tokenizer, model = _get_nllb()
+    # Force the correct source language token
+    tokenizer.src_lang = src_nllb
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+    # Get the target language token id for forced_bos
+    tgt_lang_id = tokenizer.convert_tokens_to_ids(tgt_nllb)
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            forced_bos_token_id=tgt_lang_id,
+            max_length=512,
+            num_beams=4,
+        )
+    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
 
 def _nllb_code(lang: str) -> str:
@@ -340,8 +357,7 @@ def translate_to_english(text: str, source_lang: str = "auto") -> str:
     if src == "en":
         return text
     try:
-        result = _get_nllb()(text, src_lang=_nllb_code(src), tgt_lang="eng_Latn")
-        return result[0]["translation_text"]
+        return _nllb_translate(text, src_nllb=_nllb_code(src), tgt_nllb="eng_Latn")
     except Exception as e:
         logger.error(f"NLLB →en error [{src}]: {e}")
         return text
@@ -352,10 +368,7 @@ def translate_to(text: str, target_lang: str) -> str:
     if not text or not text.strip() or target_lang == "en":
         return text
     try:
-        result = _get_nllb()(
-            text, src_lang="eng_Latn", tgt_lang=_nllb_code(target_lang)
-        )
-        return result[0]["translation_text"]
+        return _nllb_translate(text, src_nllb="eng_Latn", tgt_nllb=_nllb_code(target_lang))
     except Exception as e:
         logger.error(f"NLLB →{target_lang} error: {e}")
         return text
