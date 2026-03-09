@@ -290,12 +290,15 @@ async def call_processor_and_reply(
         print(f"HF response: {str(result)[:150]}", flush=True)
 
         text = result.get("text", "Sorry, something went wrong.")
-        await send_text(sender_id, text)
-
-        # -- Send quick-reply buttons if provided ------------------------------
         buttons = result.get("buttons", [])
+
+        # -- Send text + quick-reply buttons in ONE message --------------------
+        # Sending them as two separate messages causes buttons to flash and
+        # disappear immediately (Messenger hides quick replies on older messages).
         if buttons:
-            await send_quick_replies(sender_id, "What would you like to do?", buttons)
+            await send_quick_replies(sender_id, text, buttons)
+        else:
+            await send_text(sender_id, text)
 
         # -- Send audio reply if available -------------------------------------
         if result.get("audio_b64"):
