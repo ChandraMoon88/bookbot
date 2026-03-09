@@ -3,18 +3,22 @@ processor.py
 ------------
 FastAPI AI processor for BookHotel Bot.
 
-Key change vs previous version:
-  @app.on_event("startup") pre-warms ALL models (NLLB-200, SpeechT5, MMS-TTS,
-  Whisper) so the container is fully ready before the first request arrives.
-  Without this, the first request would hang for ~8–10 minutes while models
-  download/load — which is what was causing the silent startup log.
+Key fix vs previous version:
+  The old lifespan hook blocked uvicorn startup until ALL models were loaded
+  (~10 min on free CPU). HF Spaces has a startup timeout and killed the process
+  before it ever became healthy — causing the permanent "Starting" state.
+
+  New approach:
+    1. uvicorn starts INSTANTLY, HF Spaces sees it as healthy right away
+    2. Models load in a background thread after the server is already live
+    3. Requests arriving before models finish get a friendly "warming up" reply
+    4. /health shows per-model status so you can watch progress in real time
 """
 
 from contextlib import asynccontextmanager
-import asyncio
 import base64
-import os
 import logging
+import threading
 
 from fastapi import FastAPI, Request
 from autotranslator import (
@@ -25,7 +29,6 @@ from autotranslator import (
     translate_to_english,
     text_to_speech_bytes,
     speech_to_text,
-    # Import the private loader functions so we can pre-warm them at startup
     _get_whisper,
     _get_nllb,
     _get_speecht5,
@@ -35,58 +38,57 @@ from autotranslator import (
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STARTUP PRE-WARM
-# Loads every model into memory before the first request arrives.
-# Prevents the 8–10 minute silent hang on cold start.
+# MODEL READINESS STATE
 # ─────────────────────────────────────────────────────────────────────────────
 
-# MMS languages to pre-warm — must match MMS_PRELOAD in download_model.py
-# Uses ISO 639-3 codes (MMS model suffix), not ISO 639-1
-_MMS_PREWARM = ["eng", "hin", "tel", "tam", "fra", "spa", "ara"]
+_MMS_PREWARM   = ["eng", "hin", "tel", "tam", "fra", "spa", "ara"]
+_models_ready  = False
+_models_status: dict = {}
 
+
+def _load_models_background():
+    """
+    Loads all models after the server is already running.
+    Any request arriving before this finishes gets WARMING_UP_MESSAGE.
+    """
+    global _models_ready
+
+    def _load(name: str, fn):
+        print(f"[warmup] Loading {name}…", flush=True)
+        try:
+            fn()
+            _models_status[name] = "ready"
+            print(f"[warmup] ✅ {name} ready.", flush=True)
+        except Exception as e:
+            _models_status[name] = f"error: {e}"
+            print(f"[warmup] ❌ {name} failed: {e}", flush=True)
+
+    _load("Whisper",  _get_whisper)
+    _load("NLLB-200", _get_nllb)
+    _load("SpeechT5", _get_speecht5)
+    for code in _MMS_PREWARM:
+        _load(f"MMS-{code}", lambda c=code: _get_mms(c))
+
+    _models_ready = True
+    print("[warmup] ===== All models loaded — fully ready for requests =====", flush=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIFESPAN — server starts first, models load in background
+# ─────────────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Pre-warm all models on startup so cold requests are instant."""
-    logger.info("===== Pre-warming models on startup =====")
-
-    loop = asyncio.get_event_loop()
-
-    def _warm_all():
-        print("[startup] Loading Whisper…", flush=True)
-        _get_whisper()
-        print("[startup] ✅ Whisper ready.", flush=True)
-
-        print("[startup] Loading NLLB-200…", flush=True)
-        _get_nllb()
-        print("[startup] ✅ NLLB-200 ready.", flush=True)
-
-        print("[startup] Loading SpeechT5…", flush=True)
-        _get_speecht5()
-        print("[startup] ✅ SpeechT5 ready.", flush=True)
-
-        for code in _MMS_PREWARM:
-            print(f"[startup] Loading MMS-TTS [{code}]…", flush=True)
-            try:
-                _get_mms(code)
-                print(f"[startup] ✅ MMS-TTS [{code}] ready.", flush=True)
-            except Exception as e:
-                print(f"[startup] ⚠️  MMS-TTS [{code}] skipped: {e}", flush=True)
-
-        print("[startup] ===== All models loaded — ready for requests =====", flush=True)
-
-    # Run blocking model loads in a thread so we don't block the event loop
-    await loop.run_in_executor(None, _warm_all)
-
-    yield  # App runs here
-
-    # (shutdown hook — nothing needed)
+    print("[startup] Server starting — kicking off background model warmup…", flush=True)
+    threading.Thread(target=_load_models_background, daemon=True).start()
+    print("[startup] ✅ Server LIVE. Models loading in background.", flush=True)
+    yield
 
 
 app = FastAPI(lifespan=lifespan)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# INTENT / GREETING DETECTION
+# CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 GREETING_KEYWORDS = {
@@ -106,28 +108,44 @@ WELCOME_MESSAGE = (
     "Type or Voice 'book' to start a new booking."
 )
 
+WARMING_UP_MESSAGE = (
+    "I'm just starting up ⏳ — please send your message again in 1–2 minutes!"
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "AI processor"}
+    return {
+        "status":        "ok",
+        "models_ready":  _models_ready,
+        "models_status": _models_status,
+        "service":       "AI processor",
+    }
 
 
 @app.post("/process")
 async def process_message(request: Request):
-    try:
-        data          = await request.json()
-        sender_id     = data.get("sender_id")
-        message_type  = data.get("type", "text")
+    # Return friendly message while models are still loading
+    if not _models_ready:
+        return {
+            "text":      WARMING_UP_MESSAGE,
+            "audio_b64": None,
+            "lang":      "en",
+        }
 
-        # ── Voice input ───────────────────────────────────────────────────────
+    try:
+        data         = await request.json()
+        sender_id    = data.get("sender_id")
+        message_type = data.get("type", "text")
+
+        # ── Voice ─────────────────────────────────────────────────────────────
         if message_type == "voice":
             audio_b64   = data.get("audio_b64")
             audio_bytes = base64.b64decode(audio_b64)
             stored_lang = get_user_language(sender_id)
-
             user_message, detected = speech_to_text(audio_bytes, lang_hint=stored_lang)
             if not user_message:
                 return {
@@ -137,45 +155,29 @@ async def process_message(request: Request):
                 }
             set_user_language(sender_id, detected)
 
-        # ── Text input ────────────────────────────────────────────────────────
+        # ── Text ──────────────────────────────────────────────────────────────
         else:
             user_message = data.get("message", "")
             stored_lang  = get_user_language(sender_id)
             detected     = detect_language(user_message)
-
-            # langdetect is unreliable on very short words (≤6 chars).
-            # Trust the already-confirmed stored language instead.
             if stored_lang and len(user_message.strip()) <= 6:
                 detected = stored_lang
             else:
                 set_user_language(sender_id, detected)
 
-        # ── Translate to English for intent matching ──────────────────────────
+        # ── Intent ────────────────────────────────────────────────────────────
         english_message = translate_to_english(user_message, detected)
-        lowered         = english_message.strip().lower()
-        is_greeting     = any(kw in lowered for kw in GREETING_KEYWORDS)
+        is_greeting     = any(kw in english_message.strip().lower() for kw in GREETING_KEYWORDS)
+        bot_response    = WELCOME_MESSAGE if is_greeting else f"You said: {user_message}"
 
-        # ── Generate response ─────────────────────────────────────────────────
-        bot_response = WELCOME_MESSAGE if is_greeting else f"You said: {user_message}"
-
-        # ── Translate back to user language ───────────────────────────────────
-        lang       = get_user_language(sender_id) or "en"
-        translated = translate_to(bot_response, lang)
-
-        # ── TTS ───────────────────────────────────────────────────────────────
+        # ── Translate + TTS ───────────────────────────────────────────────────
+        lang        = get_user_language(sender_id) or "en"
+        translated  = translate_to(bot_response, lang)
         audio_bytes = text_to_speech_bytes(translated, lang)
         audio_b64   = base64.b64encode(audio_bytes).decode() if audio_bytes else None
 
-        return {
-            "text":      translated,
-            "audio_b64": audio_b64,
-            "lang":      lang,
-        }
+        return {"text": translated, "audio_b64": audio_b64, "lang": lang}
 
     except Exception as e:
         logger.error(f"Processing error: {e}", exc_info=True)
-        return {
-            "text":      "Sorry, something went wrong.",
-            "audio_b64": None,
-            "lang":      "en",
-        }
+        return {"text": "Sorry, something went wrong.", "audio_b64": None, "lang": "en"}
