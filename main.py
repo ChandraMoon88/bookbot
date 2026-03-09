@@ -289,20 +289,21 @@ async def call_processor_and_reply(
 
         print(f"HF response: {str(result)[:150]}", flush=True)
 
-        text = result.get("text", "Sorry, something went wrong.")
+        text    = result.get("text", "Sorry, something went wrong.")
         buttons = result.get("buttons", [])
 
-        # -- Send text + quick-reply buttons in ONE message --------------------
-        # Sending them as two separate messages causes buttons to flash and
-        # disappear immediately (Messenger hides quick replies on older messages).
+        # -- Send audio FIRST (if any) -----------------------------------------
+        # Quick replies are only shown on the LAST message in Messenger.
+        # Sending audio after the buttons message would hide the buttons.
+        # By sending audio first, the text+buttons message is always last.
+        if result.get("audio_b64"):
+            await send_audio(sender_id, base64.b64decode(result["audio_b64"]))
+
+        # -- Send text + quick-reply buttons in ONE message (always last) ------
         if buttons:
             await send_quick_replies(sender_id, text, buttons)
         else:
             await send_text(sender_id, text)
-
-        # -- Send audio reply if available -------------------------------------
-        if result.get("audio_b64"):
-            await send_audio(sender_id, base64.b64decode(result["audio_b64"]))
 
     except Exception as e:
         print(f"call_processor_and_reply error: {e}", flush=True)
