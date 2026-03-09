@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bookhotel-webhook
+    runtime: python
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: VERIFY_TOKEN
+        value: mybot123
+      - key: PAGE_ACCESS_TOKEN
+        value: EAAWVRMLpTZAUBQyFZAULnQT6IYHPuAEZBLKTYTrNwfUrPLSTavpnAHVhDlP6weUQpuwi6jXUwZAVCI9O1ZBF8axTI2wIKcHwyaiThXl74qyZCovEGOKuyiCcD6BnSe6ZAstYlkZAgXzc20B0kmO4D9fKY7FQEfuGxWS9HgNQ7oasz1QZB7C9ibtWzkT2THNpcS4iR728Ih0oTlQZDZD
+      - key: HF_PROCESSOR_URL
+        value: https://chandrashekar8-bookhotel.hf.space
