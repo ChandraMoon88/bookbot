@@ -110,19 +110,19 @@ _redis_conn = None
 
 def _get_redis_conn():
     """Return a Redis connection if REDIS_URL is set, otherwise None.
-    Upstash Redis requires SSL — use ssl_cert_reqs=None to allow self-signed certs.
+    Only passes SSL kwargs when the URL uses the rediss:// scheme.
+    redis:// (plain) URLs must not receive SSL kwargs — causes TypeError.
     """
     global _redis_conn
     if _redis_conn is None and _redis_lib is not None:
         url = os.getenv("REDIS_URL")
         if url:
             try:
-                # ssl_cert_reqs=None is required for Upstash (and most managed Redis)
-                _redis_conn = _redis_lib.from_url(
-                    url,
-                    decode_responses=True,
-                    ssl_cert_reqs=None,
-                )
+                kwargs: dict = {"decode_responses": True}
+                if url.startswith("rediss://"):
+                    import ssl as _ssl
+                    kwargs["ssl_cert_reqs"] = _ssl.CERT_NONE
+                _redis_conn = _redis_lib.from_url(url, **kwargs)
                 _redis_conn.ping()
                 print("[redis] Connected — language preferences will persist across restarts.",
                       flush=True)
@@ -592,6 +592,7 @@ async def process_message(request: Request):
                 {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
                 {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
                 {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+                {"content_type": "text", "title": "Start Over",      "payload": "RESTART"},
             ]
             return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang_choice}
 
@@ -634,6 +635,7 @@ async def process_message(request: Request):
             {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
             {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
             {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+            {"content_type": "text", "title": "Start Over",      "payload": "RESTART"},
         ]
         return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang}
 

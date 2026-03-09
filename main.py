@@ -167,13 +167,16 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                             call_processor_and_reply, sender_id, payload_val[5:], "text"
                         )
 
-                # ── Text or voice message ─────────────────────────────────────
+                # -- Text or voice message, including quick reply taps ----------
                 elif "message" in event:
                     msg = event["message"]
                     mid = msg.get("mid", "")
                     if mid and _is_duplicate(mid):
                         print(f"Duplicate mid={mid}, skipping.", flush=True)
                         continue
+
+                    # Quick reply buttons send message.quick_reply.payload
+                    qr_payload = (msg.get("quick_reply") or {}).get("payload", "")
 
                     attachments = msg.get("attachments", [])
                     audio_att   = next(
@@ -183,6 +186,24 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     if audio_att:
                         audio_url = audio_att["payload"]["url"]
                         background_tasks.add_task(handle_voice, sender_id, audio_url)
+                    elif qr_payload:
+                        # Route quick-reply button taps by their payload
+                        print(f"Quick reply from {sender_id}: payload={qr_payload}", flush=True)
+                        if qr_payload in ("RESTART", "ACTION_BOOK", "ACTION_HELP", "ACTION_CHANGE_LANG"):
+                            background_tasks.add_task(
+                                call_processor_and_reply, sender_id, qr_payload, "text"
+                            )
+                        elif qr_payload.startswith("LANG_"):
+                            # Language button — strip prefix, send the code as text
+                            background_tasks.add_task(
+                                call_processor_and_reply, sender_id, qr_payload[5:], "text"
+                            )
+                        else:
+                            # Unknown payload — fall back to the button's display title
+                            user_message = msg.get("text", qr_payload)
+                            background_tasks.add_task(
+                                call_processor_and_reply, sender_id, user_message, "text"
+                            )
                     else:
                         user_message = msg.get("text", "")
                         if user_message:
