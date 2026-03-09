@@ -287,7 +287,10 @@ def detect_language(text: str) -> str:
         return script
     try:
         langs = detect_langs(text)
-        if langs and langs[0].prob >= 0.80:
+        # Short Latin text (≤15 chars) needs higher confidence — langdetect is
+        # unreliable on single words, e.g. "welcome" gets labelled Dutch (nl).
+        min_prob = 0.95 if len(text.strip()) <= 15 else 0.80
+        if langs and langs[0].prob >= min_prob:
             return langs[0].lang
     except Exception:
         pass
@@ -575,9 +578,16 @@ def speech_to_text(
 
     Two-pass strategy:
       Pass 1 — auto-detect language
-      Pass 2 — re-run with pinned lang_hint when confidence < threshold
-               (prevents low-resource language mis-detection, e.g. Telugu → pt)
+      Pass 2 — re-run with pinned lang_hint when:
+               (a) confidence < threshold, OR
+               (b) hint is an Indian language  ← Whisper "small" frequently
+                   mis-labels Indian audio as Russian / Portuguese etc.
     """
+    # Languages where Whisper "small" is unreliable — always pin to hint if available
+    _UNRELIABLE = {
+        "hi", "te", "ta", "kn", "ml", "bn", "mr",
+        "gu", "pa", "ur", "or", "ne", "si",
+    }
     CONFIDENCE_THRESHOLD = 0.75
     tmp_path: str | None = None
     try:
@@ -599,12 +609,15 @@ def speech_to_text(
         prob     = info.language_probability
         logger.info(f"Whisper auto: lang={detected} prob={prob:.2f} text='{text}'")
 
-        # Pass 2 — pin to hint on low confidence
+        # Pass 2 — re-run with hint when:
+        #   (a) low confidence (original logic), OR
+        #   (b) hint is an Indian language and Whisper detected something different
+        #       (Whisper "small" mis-labels Indian audio as ru/pt/etc. with high confidence)
         if (
             lang_hint
             and lang_hint != "en"
-            and prob < CONFIDENCE_THRESHOLD
             and detected != lang_hint
+            and (prob < CONFIDENCE_THRESHOLD or lang_hint in _UNRELIABLE)
         ):
             logger.info(f"Low confidence ({prob:.2f}) — retrying with lang='{lang_hint}'")
             segs2, info2 = model.transcribe(

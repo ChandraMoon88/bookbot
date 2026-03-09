@@ -91,6 +91,10 @@ app = FastAPI(lifespan=lifespan)
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
+# English-only greeting keywords.
+# Intent detection works for ALL languages because the incoming message is
+# translated to English first — then checked against these keywords.
+# Do NOT add non-English / transliterated words here.
 GREETING_KEYWORDS = {
     "hi", "hello", "hey", "hlo", "hii", "howdy", "sup", "yo",
     "greetings", "morning", "afternoon", "evening", "night",
@@ -98,6 +102,22 @@ GREETING_KEYWORDS = {
     "good day", "how are you", "what's up", "whats up",
     "welcome", "start", "begin", "help",
 }
+
+
+def _is_greeting(raw: str, english_translation: str) -> bool:
+    """
+    Return True if the message is a greeting.
+    Checks two ways so it works for every language and for both text and voice:
+      1. Raw text match  — catches English greetings directly ("hello", "welcome" …)
+      2. Translated match — catches greetings in any language after NLLB translates
+                            them to English ("नमस्ते" → "hello", "bonjour" → "hello" …)
+    """
+    raw_lower = raw.strip().lower()
+    en_lower  = english_translation.strip().lower()
+    return (
+        any(kw == raw_lower or kw in raw_lower for kw in GREETING_KEYWORDS)
+        or any(kw in en_lower for kw in GREETING_KEYWORDS)
+    )
 
 WELCOME_MESSAGE = (
     "Welcome to BookBot!\n\n"
@@ -153,21 +173,42 @@ async def process_message(request: Request):
                     "audio_b64": None,
                     "lang":      stored_lang or "en",
                 }
+            # Final safety net: if the user's stored language is Indian and
+            # Whisper still disagrees even after the pinned Pass 2 retry,
+            # trust the stored language — Whisper "small" hallucinates non-Indian
+            # scripts (e.g. Russian Cyrillic) from Indian language audio.
+            _indian = {
+                "hi", "te", "ta", "kn", "ml", "bn", "mr",
+                "gu", "pa", "ur", "or", "ne", "si",
+            }
+            if stored_lang in _indian and detected not in _indian:
+                detected = stored_lang
             set_user_language(sender_id, detected)
 
         # ── Text ──────────────────────────────────────────────────────────────
         else:
             user_message = data.get("message", "")
             stored_lang  = get_user_language(sender_id)
-            detected     = detect_language(user_message)
-            if stored_lang and len(user_message.strip()) <= 6:
-                detected = stored_lang
-            else:
-                set_user_language(sender_id, detected)
+            raw_lower    = user_message.strip().lower()
 
-        # ── Intent ────────────────────────────────────────────────────────────
+            # Priority 1: raw text is a known English keyword → it IS English.
+            #   This stops langdetect from misidentifying common English words;
+            #   e.g. langdetect labels "welcome" as Dutch (nl) with high confidence.
+            if any(kw == raw_lower or kw in raw_lower for kw in GREETING_KEYWORDS):
+                detected = "en"
+            # Priority 2: short text from a known user → keep their stored language.
+            elif stored_lang and len(user_message.strip()) <= 6:
+                detected = stored_lang
+            # Priority 3: run the language detector.
+            else:
+                detected = detect_language(user_message)
+
+            set_user_language(sender_id, detected)
+
+        # ── Intent (shared for text AND voice) ────────────────────────────────
+        # Translate to English first so greeting detection works for every language.
         english_message = translate_to_english(user_message, detected)
-        is_greeting     = any(kw in english_message.strip().lower() for kw in GREETING_KEYWORDS)
+        is_greeting     = _is_greeting(user_message, english_message)
         bot_response    = WELCOME_MESSAGE if is_greeting else f"You said: {user_message}"
 
         # ── Translate + TTS ───────────────────────────────────────────────────
