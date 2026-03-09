@@ -103,42 +103,109 @@ _user_states: dict[str, dict] = {}
 
 def _get_state(sender_id: str) -> dict:
     if sender_id not in _user_states:
-        _user_states[sender_id] = {"lang_confirmed": False, "awaiting_lang": True}
+        _user_states[sender_id] = {
+            "lang_confirmed": False,
+            "awaiting_lang":  True,
+            "lang_page":      1,       # 1 = first 20 languages, 2 = next 20
+        }
     return _user_states[sender_id]
 
 
-# ── Language selection menu ───────────────────────────────────────────────────
-LANGUAGE_MENU = {
-    "1": "en", "2": "hi", "3": "te", "4": "ta", "5": "kn",
-    "6": "ml", "7": "bn", "8": "fr", "9": "es", "10": "ar",
+# ── Language catalogue (globally popular, ordered by speaker count) ───────────
+# Page 1 — top 20 by global speakers
+_LANG_PAGE1 = [
+    ("1",  "en",  "English"),
+    ("2",  "zh",  "Chinese (中文)"),
+    ("3",  "hi",  "Hindi (हिंदी)"),
+    ("4",  "es",  "Spanish (Español)"),
+    ("5",  "fr",  "French (Français)"),
+    ("6",  "ar",  "Arabic (العربية)"),
+    ("7",  "bn",  "Bengali (বাংলা)"),
+    ("8",  "pt",  "Portuguese (Português)"),
+    ("9",  "ru",  "Russian (Русский)"),
+    ("10", "ur",  "Urdu (اردو)"),
+    ("11", "id",  "Indonesian (Bahasa)"),
+    ("12", "de",  "German (Deutsch)"),
+    ("13", "ja",  "Japanese (日本語)"),
+    ("14", "te",  "Telugu (తెలుగు)"),
+    ("15", "ta",  "Tamil (தமிழ்)"),
+    ("16", "mr",  "Marathi (मराठी)"),
+    ("17", "tr",  "Turkish (Türkçe)"),
+    ("18", "ko",  "Korean (한국어)"),
+    ("19", "it",  "Italian (Italiano)"),
+    ("20", "ml",  "Malayalam (മലയാളം)"),
+]
+
+# Page 2 — next 20 by global speakers
+_LANG_PAGE2 = [
+    ("21", "kn",  "Kannada (ಕನ್ನಡ)"),
+    ("22", "gu",  "Gujarati (ગુજરાતી)"),
+    ("23", "pa",  "Punjabi (ਪੰਜਾਬੀ)"),
+    ("24", "pl",  "Polish (Polski)"),
+    ("25", "uk",  "Ukrainian (Українська)"),
+    ("26", "nl",  "Dutch (Nederlands)"),
+    ("27", "th",  "Thai (ภาษาไทย)"),
+    ("28", "vi",  "Vietnamese (Tiếng Việt)"),
+    ("29", "fa",  "Persian (فارسی)"),
+    ("30", "sw",  "Swahili (Kiswahili)"),
+    ("31", "ms",  "Malay (Bahasa Melayu)"),
+    ("32", "fil", "Filipino (Tagalog)"),
+    ("33", "ro",  "Romanian (Română)"),
+    ("34", "el",  "Greek (Ελληνικά)"),
+    ("35", "cs",  "Czech (Čeština)"),
+    ("36", "hu",  "Hungarian (Magyar)"),
+    ("37", "he",  "Hebrew (עברית)"),
+    ("38", "sv",  "Swedish (Svenska)"),
+    ("39", "fi",  "Finnish (Suomi)"),
+    ("40", "or",  "Odia (ଓଡ଼ିଆ)"),
+]
+
+# Combined lookup: number → code
+LANGUAGE_MENU: dict[str, str] = {
+    num: code for num, code, _ in (_LANG_PAGE1 + _LANG_PAGE2)
 }
-LANGUAGE_LABELS = {
-    "en": "English",             "hi": "Hindi (हिंदी)",
-    "te": "Telugu (తెలుగు)",     "ta": "Tamil (தமிழ்)",
-    "kn": "Kannada (ಕನ್ನಡ)",   "ml": "Malayalam (മലയാളം)",
-    "bn": "Bengali (বাংলা)",    "fr": "French (Français)",
-    "es": "Spanish (Español)",  "ar": "Arabic (العربية)",
+
+# Combined lookup: code → display label
+LANGUAGE_LABELS: dict[str, str] = {
+    code: label for _, code, label in (_LANG_PAGE1 + _LANG_PAGE2)
 }
-_LANG_BY_NAME = {
-    "english": "en", "hindi": "hi",    "telugu": "te",  "tamil": "ta",
-    "kannada": "kn", "malayalam": "ml", "bengali": "bn",
-    "french":  "fr", "spanish": "es",  "arabic": "ar",
+
+# All known language names → code (for free-text input)
+_LANG_BY_NAME: dict[str, str] = {
+    "english": "en",    "chinese": "zh",     "mandarin": "zh",
+    "hindi": "hi",      "spanish": "es",     "french": "fr",
+    "arabic": "ar",     "bengali": "bn",     "portuguese": "pt",
+    "russian": "ru",    "urdu": "ur",        "indonesian": "id",
+    "bahasa": "id",     "german": "de",      "japanese": "ja",
+    "telugu": "te",     "tamil": "ta",       "marathi": "mr",
+    "turkish": "tr",    "korean": "ko",      "italian": "it",
+    "malayalam": "ml",  "kannada": "kn",     "gujarati": "gu",
+    "punjabi": "pa",    "polish": "pl",      "ukrainian": "uk",
+    "dutch": "nl",      "thai": "th",        "vietnamese": "vi",
+    "persian": "fa",    "farsi": "fa",       "swahili": "sw",
+    "malay": "ms",      "filipino": "fil",   "tagalog": "fil",
+    "romanian": "ro",   "greek": "el",       "czech": "cs",
+    "hungarian": "hu",  "hebrew": "he",      "swedish": "sv",
+    "finnish": "fi",    "odia": "or",        "oriya": "or",
 }
-LANGUAGE_SELECTION_MSG = (
-    "Welcome to BookBot! 🏨\n\n"
-    "Please choose your language:\n\n"
-    "1. English\n"
-    "2. Hindi (हिंदी)\n"
-    "3. Telugu (తెలుగు)\n"
-    "4. Tamil (தமிழ்)\n"
-    "5. Kannada (ಕನ್ನಡ)\n"
-    "6. Malayalam (മലയാളം)\n"
-    "7. Bengali (বাংলা)\n"
-    "8. French (Français)\n"
-    "9. Spanish (Español)\n"
-    "10. Arabic (العربية)\n\n"
-    "Reply with a number — e.g. '1' for English, '2' for Hindi 😊"
-)
+
+
+def _build_lang_menu_text(page: int) -> str:
+    items = _LANG_PAGE1 if page == 1 else _LANG_PAGE2
+    lines = "\n".join(f"{num}. {label}" for num, _, label in items)
+    if page == 1:
+        footer = "\nM — More languages (21–40)\nOr type any language name, e.g. 'Portuguese'"
+    else:
+        footer = "\nB — Back to previous page (1–20)\nOr type any language name, e.g. 'Swahili'"
+    return (
+        "Welcome to BookBot! 🏨\n\n"
+        "Please choose your language:\n\n"
+        + lines + footer +
+        "\n\nReply with a number, letter, or language name 😊"
+    )
+
+
+LANGUAGE_SELECTION_MSG = _build_lang_menu_text(1)
 
 # Phrases (checked against English translation) that trigger language change
 _CHANGE_LANG_TRIGGERS = {
@@ -148,14 +215,31 @@ _CHANGE_LANG_TRIGGERS = {
 }
 
 
-def _parse_lang_selection(text: str) -> str | None:
-    """Return ISO language code if text is a valid language selection, else None."""
+def _parse_lang_selection(text: str, current_page: int = 1) -> str | tuple | None:
+    """
+    Returns:
+      - ISO language code string  → confirmed selection
+      - ("page", 2)               → user wants more languages
+      - ("page", 1)               → user wants to go back
+      - None                      → cannot parse
+    """
     t = text.strip().lower()
+
+    # Navigation
+    if t in ("m", "more", "more languages", "next", "next page"):
+        return ("page", 2)
+    if t in ("b", "back", "previous", "back page", "previous page"):
+        return ("page", 1)
+
+    # Number selection
     if t in LANGUAGE_MENU:
         return LANGUAGE_MENU[t]
+
+    # Free-text language name
     for name, code in _LANG_BY_NAME.items():
         if name in t:
             return code
+
     return None
 
 
@@ -290,13 +374,24 @@ async def process_message(request: Request):
         # ── Step 2: Language selection flow ────────────────────────────────────
         # Every new user (and any user who requested a language change) goes here.
         if state["awaiting_lang"]:
-            lang_choice = _parse_lang_selection(user_message)
+            result = _parse_lang_selection(user_message, state["lang_page"])
 
-            if lang_choice is None:
-                # Cannot parse — show the menu
-                audio_out = text_to_speech_bytes(LANGUAGE_SELECTION_MSG, "en")
+            # Navigation: user wants page 2 or back to page 1
+            if isinstance(result, tuple) and result[0] == "page":
+                state["lang_page"] = result[1]
+                menu_text = _build_lang_menu_text(result[1])
+                audio_out = text_to_speech_bytes(menu_text, "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
-                return {"text": LANGUAGE_SELECTION_MSG, "audio_b64": a64, "lang": "en"}
+                return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+
+            if result is None:
+                # Cannot parse — (re)show the current page
+                menu_text = _build_lang_menu_text(state["lang_page"])
+                audio_out = text_to_speech_bytes(menu_text, "en")
+                a64 = base64.b64encode(audio_out).decode() if audio_out else None
+                return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+
+            lang_choice = result  # confirmed ISO code
 
             # User chose a language — confirm and store
             set_user_language(sender_id, lang_choice)
@@ -334,9 +429,11 @@ async def process_message(request: Request):
         ):
             state["lang_confirmed"] = False
             state["awaiting_lang"]  = True
-            audio_out = text_to_speech_bytes(LANGUAGE_SELECTION_MSG, "en")
+            state["lang_page"]      = 1
+            menu_text = _build_lang_menu_text(1)
+            audio_out = text_to_speech_bytes(menu_text, "en")
             a64 = base64.b64encode(audio_out).decode() if audio_out else None
-            return {"text": LANGUAGE_SELECTION_MSG, "audio_b64": a64, "lang": "en"}
+            return {"text": menu_text, "audio_b64": a64, "lang": "en"}
 
         # Get a natural human-like response (in English), then translate
         bot_en = _human_response(en_lower) or (
