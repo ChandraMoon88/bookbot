@@ -25,6 +25,7 @@ protobuf>=3.20.0              # dependency of sentencepiece
 accelerate>=0.27.0            # speeds up model loading on CPU
 datasets>=2.14.0              # CMU Arctic speaker embeddings for SpeechT5
 soundfile>=0.12.1             # WAV I/O for SpeechT5 / MMS-TTS output
+sentence-transformers>=2.2.2  # semantic hotel re-ranking (all-MiniLM-L6-v2)
 
 # ── STT  (Whisper — unchanged) ────────────────────────────────────────────────
 faster-whisper>=1.0.3     # pin floor only; exact pin can fail on Render's pip mirror

@@ -46,10 +46,10 @@ async def _setup_messenger_profile():
                 "locale": "default",
                 "composer_input_disabled": False,
                 "call_to_actions": [
-                    {"type": "postback", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
-                    {"type": "postback", "title": "Help",            "payload": "ACTION_HELP"},
-                    {"type": "postback", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
-                    {"type": "postback", "title": "Start Over",      "payload": "RESTART"},
+                    {"type": "postback", "title": "Book a Hotel",     "payload": "ACTION_BOOK"},
+                    {"type": "postback", "title": "My Bookings",      "payload": "MY_BOOKINGS"},
+                    {"type": "postback", "title": "Change Language",  "payload": "ACTION_CHANGE_LANG"},
+                    {"type": "postback", "title": "Start Over",       "payload": "RESTART"},
                 ],
             }
         ],
@@ -157,7 +157,10 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                         background_tasks.add_task(
                             call_processor_and_reply, sender_id, "RESTART", "text"
                         )
-                    elif payload_val in ("ACTION_BOOK", "ACTION_HELP", "ACTION_CHANGE_LANG"):
+                    elif payload_val in ("ACTION_BOOK", "ACTION_HELP",
+                                        "ACTION_CHANGE_LANG",
+                                        "MY_BOOKINGS", "CANCEL_BOOKING",
+                                        "LOOKUP_BOOKING"):
                         background_tasks.add_task(
                             call_processor_and_reply, sender_id, payload_val, "text"
                         )
@@ -189,7 +192,9 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                     elif qr_payload:
                         # Route quick-reply button taps by their payload
                         print(f"Quick reply from {sender_id}: payload={qr_payload}", flush=True)
-                        if qr_payload in ("RESTART", "ACTION_BOOK", "ACTION_HELP", "ACTION_CHANGE_LANG"):
+                        if qr_payload in ("RESTART", "ACTION_BOOK", "ACTION_HELP",
+                                          "ACTION_CHANGE_LANG", "MY_BOOKINGS",
+                                          "CANCEL_BOOKING", "LOOKUP_BOOKING"):
                             background_tasks.add_task(
                                 call_processor_and_reply, sender_id, qr_payload, "text"
                             )
@@ -197,6 +202,15 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                             # Language button — strip prefix, send the code as text
                             background_tasks.add_task(
                                 call_processor_and_reply, sender_id, qr_payload[5:], "text"
+                            )
+                        elif qr_payload.startswith((
+                            "HOTEL_", "ROOM_", "MEAL_",
+                            "CHECKIN_", "CHECKOUT_", "GUESTS_",
+                            "CONFIRM_", "CANCEL_", "SKIP_",
+                        )):
+                            # Structured booking-flow payloads — forward raw payload
+                            background_tasks.add_task(
+                                call_processor_and_reply, sender_id, qr_payload, "text"
                             )
                         else:
                             # Unknown payload — fall back to the button's display title
