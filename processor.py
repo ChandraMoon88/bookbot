@@ -160,15 +160,17 @@ def _get_state(sender_id: str) -> dict:
         if persisted:
             set_user_language(sender_id, persisted)
             _user_states[sender_id] = {
-                "lang_confirmed": True,
-                "awaiting_lang":  False,
-                "lang_page":      1,
+                "lang_confirmed":      True,
+                "awaiting_lang":       False,
+                "lang_page":           1,
+                "awaiting_type_input": False,
             }
         else:
             _user_states[sender_id] = {
-                "lang_confirmed": False,
-                "awaiting_lang":  True,
-                "lang_page":      1,
+                "lang_confirmed":      False,
+                "awaiting_lang":       True,
+                "lang_page":           1,
+                "awaiting_type_input": False,
             }
     return _user_states[sender_id]
 
@@ -292,36 +294,42 @@ def _strip_for_tts(text: str) -> str:
 
 
 def _build_lang_menu_text(page: int) -> str:
-    items = _LANG_PAGE1 if page == 1 else _LANG_PAGE2
-    lines = "\n".join(f"{num}. {label}" for num, _, label in items)
-    if page == 1:
-        footer = "\nM - More languages (21-40)\nOr type any language name, e.g. Portuguese"
-    else:
-        footer = "\nB - Back to previous page (1-20)\nOr type any language name, e.g. Swahili"
+    """Short prompt shown alongside language quick-reply buttons (10 per page)."""
+    all_langs = _LANG_PAGE1 + _LANG_PAGE2
+    start = (page - 1) * 10
+    end   = min(start + 10, len(all_langs))
     return (
-        "Welcome to BookBot!\n\n"
-        "Please choose your language:\n\n"
-        + lines + footer +
-        "\n\nReply with a number or language name."
+        f"Choose your language ({start + 1}-{end} of 40):\n"
+        "Tap a button, or tap 'Type my language' to type it."
     )
 
 
 def _build_lang_buttons(page: int) -> list:
-    """Build Messenger quick-reply button list for the language menu."""
-    items = _LANG_PAGE1 if page == 1 else _LANG_PAGE2
-    buttons = [
+    """10 languages per page + Back / More / Type buttons. Max 13 quick replies."""
+    all_langs = _LANG_PAGE1 + _LANG_PAGE2
+    start     = (page - 1) * 10
+    items     = all_langs[start:start + 10]
+    buttons   = [
         {"content_type": "text", "title": label, "payload": f"LANG_{code}"}
         for _, code, label in items
     ]
-    if page == 1:
-        buttons.append({"content_type": "text", "title": "More (21-40)", "payload": "LANG_PAGE_2"})
-    else:
-        buttons.append({"content_type": "text", "title": "Back (1-20)", "payload": "LANG_PAGE_1"})
-    # Facebook allows max 13 quick replies
+    if page > 1:
+        buttons.append({"content_type": "text", "title": "Back",             "payload": f"LANG_PAGE_{page - 1}"})
+    if page < 4:
+        buttons.append({"content_type": "text", "title": "More languages",   "payload": f"LANG_PAGE_{page + 1}"})
+    buttons.append({"content_type": "text", "title": "Type my language",   "payload": "LANG_TYPE"})
     return buttons[:13]
 
 
 LANGUAGE_SELECTION_MSG = _build_lang_menu_text(1)
+
+# Always-visible action buttons appended to every bot reply once language is set
+_MAIN_BUTTONS = [
+    {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
+    {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
+    {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+    {"content_type": "text", "title": "Restart",         "payload": "RESTART"},
+]
 
 # Phrases (checked against English translation) that trigger language change
 _CHANGE_LANG_TRIGGERS = {
@@ -334,18 +342,31 @@ _CHANGE_LANG_TRIGGERS = {
 def _parse_lang_selection(text: str, current_page: int = 1) -> str | tuple | None:
     """
     Returns:
-      - ISO language code string  → confirmed selection
-      - ("page", 2)               → user wants more languages
-      - ("page", 1)               → user wants to go back
-      - None                      → cannot parse
+      - ISO language code string       -> confirmed selection
+      - ("page", N)                    -> navigate to page N (1-4)
+      - ("type_input",)                -> user tapped 'Type my language'
+      - ("autodetect", code)           -> language detected from user's script
+      - None                           -> cannot parse
     """
     t = text.strip().lower()
 
-    # Navigation
+    # Button payload navigation — LANG_PAGE_N arrives as page_n after prefix strip
+    if t.startswith("page_") and t[5:].isdigit():
+        return ("page", int(t[5:]))
+
+    # "Type my language" button payload
+    if t == "type":
+        return ("type_input",)
+
+    # Direct ISO code from a language button tap (e.g. "en", "hi", "zh")
+    if t in LANGUAGE_LABELS:
+        return t
+
+    # Legacy text navigation
     if t in ("m", "more", "more languages", "next", "next page"):
-        return ("page", 2)
+        return ("page", min(current_page + 1, 4))
     if t in ("b", "back", "previous", "back page", "previous page"):
-        return ("page", 1)
+        return ("page", max(current_page - 1, 1))
 
     # Number selection
     if t in LANGUAGE_MENU:
@@ -506,11 +527,52 @@ async def process_message(request: Request):
             state["awaiting_lang"] = True
             state["lang_confirmed"] = False
 
+        # ── GET_STARTED: show welcome message + first page of language buttons ─
+        if user_message.strip().upper() == "GET_STARTED":
+            _user_states.pop(sender_id, None)
+            state = _get_state(sender_id)
+            welcome_en = (
+                "Welcome to BookBot!\n\n"
+                "I am your hotel booking assistant.\n"
+                "I can search hotels, check availability, and make bookings.\n\n"
+                "First, choose your language:"
+            )
+            lang_buttons = _build_lang_buttons(1)
+            audio_out    = text_to_speech_bytes(_strip_for_tts(welcome_en), "en")
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": welcome_en, "buttons": lang_buttons, "audio_b64": a64, "lang": "en"}
+
         # ── Step 2: Language selection flow ────────────────────────────────────
         if state["awaiting_lang"]:
-            result = _parse_lang_selection(user_message, state["lang_page"])
+            # User tapped "Type my language" and is now typing a language name
+            if state.get("awaiting_type_input"):
+                t_lower    = user_message.strip().lower()
+                found_code = None
+                for name, code in _LANG_BY_NAME.items():
+                    if name in t_lower:
+                        found_code = code
+                        break
+                if not found_code and t_lower in LANGUAGE_MENU:
+                    found_code = LANGUAGE_MENU[t_lower]
+                if not found_code:
+                    try:
+                        detected = detect_language(user_message)
+                        if detected and detected != "en":
+                            found_code = detected
+                    except Exception:
+                        pass
+                if not found_code:
+                    err_text = (
+                        f"Sorry, I could not find '{user_message[:30]}'.\n"
+                        "Please try again, or choose from the list:"
+                    )
+                    return {"text": err_text, "buttons": _build_lang_buttons(state["lang_page"]), "audio_b64": None, "lang": "en"}
+                state["awaiting_type_input"] = False
+                result = found_code
+            else:
+                result = _parse_lang_selection(user_message, state["lang_page"])
 
-            # Navigation: user wants page 2 or back to page 1
+            # Navigation: move to a different language page
             if isinstance(result, tuple) and result[0] == "page":
                 state["lang_page"] = result[1]
                 menu_text = _build_lang_menu_text(result[1])
@@ -519,6 +581,15 @@ async def process_message(request: Request):
                 audio_out = text_to_speech_bytes(tts_text, "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
                 return {"text": menu_text, "buttons": buttons, "audio_b64": a64, "lang": "en"}
+
+            # "Type my language" button tapped — ask user to type
+            if isinstance(result, tuple) and result[0] == "type_input":
+                state["awaiting_type_input"] = True
+                type_prompt = (
+                    "Please type your language name.\n\n"
+                    "Examples: Hindi, Spanish, Arabic, Tamil, French, Swahili"
+                )
+                return {"text": type_prompt, "buttons": [], "audio_b64": None, "lang": "en"}
 
             # Auto-detected language from what the user typed
             if isinstance(result, tuple) and result[0] == "autodetect":
@@ -586,17 +657,10 @@ async def process_message(request: Request):
                 "Tap Book a Hotel to start your first booking."
             )
             body_text = translate_to(body_en, lang_choice) if lang_choice != "en" else body_en
-            full_text = body_text + "\n\nType 'change language' anytime to switch."
             tts_text  = _strip_for_tts(body_text)
             audio_out = text_to_speech_bytes(tts_text, lang_choice)
             a64 = base64.b64encode(audio_out).decode() if audio_out else None
-            main_buttons = [
-                {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
-                {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
-                {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
-                {"content_type": "text", "title": "Start Over",      "payload": "RESTART"},
-            ]
-            return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang_choice}
+            return {"text": body_text, "buttons": _MAIN_BUTTONS, "audio_b64": a64, "lang": lang_choice}
 
         # ── Step 3: Normal conversation (language already confirmed) ───────────
         input_lang    = stt_lang or detect_language(user_message)
@@ -606,9 +670,10 @@ async def process_message(request: Request):
         # Handle quick-reply button payloads
         raw_upper = user_message.strip().upper()
         if raw_upper == "ACTION_CHANGE_LANG" or any(trigger in en_lower for trigger in _CHANGE_LANG_TRIGGERS) or "change language" in user_message.lower():
-            state["lang_confirmed"] = False
-            state["awaiting_lang"]  = True
-            state["lang_page"]      = 1
+            state["lang_confirmed"]      = False
+            state["awaiting_lang"]       = True
+            state["lang_page"]           = 1
+            state["awaiting_type_input"] = False
             menu_text = _build_lang_menu_text(1)
             buttons   = _build_lang_buttons(1)
             tts_text  = _strip_for_tts(menu_text)
@@ -629,17 +694,10 @@ async def process_message(request: Request):
             "- Tap Change Language to switch your language"
         )
         response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
-        full_text     = response_text + "\n\nType 'change language' anytime to switch."
         tts_text      = _strip_for_tts(response_text)
         audio_out     = text_to_speech_bytes(tts_text, lang)
         a64 = base64.b64encode(audio_out).decode() if audio_out else None
-        main_buttons = [
-            {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
-            {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
-            {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
-            {"content_type": "text", "title": "Start Over",      "payload": "RESTART"},
-        ]
-        return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang}
+        return {"text": response_text, "buttons": _MAIN_BUTTONS, "audio_b64": a64, "lang": lang}
 
     except Exception as e:
         logger.error(f"Processing error: {e}", exc_info=True)
