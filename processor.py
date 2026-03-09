@@ -379,6 +379,12 @@ def _parse_lang_selection(text: str, current_page: int = 1) -> str | tuple | Non
 
     # Last resort: auto-detect the language the user is TYPING IN
     # e.g. user types "Telugu" in Telugu script → detect as "te"
+    # Skip auto-detect for known bot command words to avoid false positives
+    _NO_AUTODETECT = {"restart", "refresh", "start_over", "get_started",
+                      "action_book", "action_help", "action_change_lang",
+                      "yes", "no", "ok", "type", "back", "more"}
+    if t in _NO_AUTODETECT:
+        return None
     try:
         detected = detect_language(text)
         if detected and detected != "en":
@@ -522,10 +528,15 @@ async def process_message(request: Request):
             _user_states.pop(sender_id, None)
             set_user_language(sender_id, "en")
             _redis_set_lang(sender_id, "en")
-            state = _get_state(sender_id)
-            # Force language selection flow
-            state["awaiting_lang"] = True
-            state["lang_confirmed"] = False
+            # Return the welcome + language menu immediately (do NOT fall through
+            # to _parse_lang_selection — it would auto-detect "RESTART" as a language)
+            welcome_en = (
+                "Welcome back to BookBot!\n\n"
+                "Let's start fresh. Choose your language:"
+            )
+            audio_out = text_to_speech_bytes(_strip_for_tts(welcome_en), "en")
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": welcome_en, "buttons": _build_lang_buttons(1), "audio_b64": a64, "lang": "en"}
 
         # ── GET_STARTED: show welcome message + first page of language buttons ─
         if user_message.strip().upper() == "GET_STARTED":
