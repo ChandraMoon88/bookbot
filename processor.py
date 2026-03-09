@@ -18,7 +18,13 @@ Key fix vs previous version:
 from contextlib import asynccontextmanager
 import base64
 import logging
+import os
 import threading
+
+try:
+    import redis as _redis_lib
+except ImportError:
+    _redis_lib = None
 
 from fastapi import FastAPI, Request
 from autotranslator import (
@@ -96,18 +102,65 @@ WARMING_UP_MESSAGE = (
 )
 
 # ── Per-user session state ────────────────────────────────────────────────────
-# Tracks language selection progress. Resets on server restart (acceptable for
-# free-tier HF Spaces — user just re-selects language on cold start).
+# In-memory store; bootstrapped from Redis on first access so language choice
+# survives HF Spaces restarts (Redis is optional — falls back to in-memory).
 _user_states: dict[str, dict] = {}
+_redis_conn = None
+
+
+def _get_redis_conn():
+    """Return a Redis connection if REDIS_URL is set, otherwise None."""
+    global _redis_conn
+    if _redis_conn is None and _redis_lib is not None:
+        url = os.getenv("REDIS_URL")
+        if url:
+            try:
+                _redis_conn = _redis_lib.from_url(url, decode_responses=True)
+                _redis_conn.ping()
+                print("[redis] Connected — language preferences will persist across restarts.",
+                      flush=True)
+            except Exception as e:
+                print(f"[redis] Unavailable ({e}) — using in-memory state.", flush=True)
+                _redis_conn = None
+    return _redis_conn
+
+
+def _redis_get_lang(sender_id: str) -> str | None:
+    r = _get_redis_conn()
+    if r:
+        try:
+            return r.get(f"bblang:{sender_id}")
+        except Exception:
+            pass
+    return None
+
+
+def _redis_set_lang(sender_id: str, lang: str) -> None:
+    r = _get_redis_conn()
+    if r:
+        try:
+            r.setex(f"bblang:{sender_id}", 86400 * 90, lang)  # 90-day TTL
+        except Exception:
+            pass
 
 
 def _get_state(sender_id: str) -> dict:
     if sender_id not in _user_states:
-        _user_states[sender_id] = {
-            "lang_confirmed": False,
-            "awaiting_lang":  True,
-            "lang_page":      1,       # 1 = first 20 languages, 2 = next 20
-        }
+        # Try to restore language from Redis (survives HF Spaces restarts)
+        persisted = _redis_get_lang(sender_id)
+        if persisted:
+            set_user_language(sender_id, persisted)
+            _user_states[sender_id] = {
+                "lang_confirmed": True,
+                "awaiting_lang":  False,
+                "lang_page":      1,
+            }
+        else:
+            _user_states[sender_id] = {
+                "lang_confirmed": False,
+                "awaiting_lang":  True,
+                "lang_page":      1,
+            }
     return _user_states[sender_id]
 
 
@@ -171,22 +224,47 @@ LANGUAGE_LABELS: dict[str, str] = {
 }
 
 # All known language names → code (for free-text input)
+# Covers all NLLB-200 supported languages + common alternate names
 _LANG_BY_NAME: dict[str, str] = {
-    "english": "en",    "chinese": "zh",     "mandarin": "zh",
-    "hindi": "hi",      "spanish": "es",     "french": "fr",
-    "arabic": "ar",     "bengali": "bn",     "portuguese": "pt",
-    "russian": "ru",    "urdu": "ur",        "indonesian": "id",
-    "bahasa": "id",     "german": "de",      "japanese": "ja",
-    "telugu": "te",     "tamil": "ta",       "marathi": "mr",
-    "turkish": "tr",    "korean": "ko",      "italian": "it",
-    "malayalam": "ml",  "kannada": "kn",     "gujarati": "gu",
-    "punjabi": "pa",    "polish": "pl",      "ukrainian": "uk",
-    "dutch": "nl",      "thai": "th",        "vietnamese": "vi",
-    "persian": "fa",    "farsi": "fa",       "swahili": "sw",
-    "malay": "ms",      "filipino": "fil",   "tagalog": "fil",
-    "romanian": "ro",   "greek": "el",       "czech": "cs",
-    "hungarian": "hu",  "hebrew": "he",      "swedish": "sv",
-    "finnish": "fi",    "odia": "or",        "oriya": "or",
+    # Major world languages
+    "english": "en",       "chinese": "zh",       "mandarin": "zh",
+    "cantonese": "zh",     "hindi": "hi",          "spanish": "es",
+    "castilian": "es",     "french": "fr",         "arabic": "ar",
+    "bengali": "bn",       "bangla": "bn",         "portuguese": "pt",
+    "russian": "ru",       "urdu": "ur",           "indonesian": "id",
+    "bahasa": "id",        "german": "de",         "japanese": "ja",
+    "telugu": "te",        "tamil": "ta",          "marathi": "mr",
+    "turkish": "tr",       "korean": "ko",         "italian": "it",
+    "malayalam": "ml",     "kannada": "kn",        "gujarati": "gu",
+    "punjabi": "pa",       "polish": "pl",         "ukrainian": "uk",
+    "dutch": "nl",         "flemish": "nl",        "thai": "th",
+    "vietnamese": "vi",    "persian": "fa",        "farsi": "fa",
+    "swahili": "sw",       "kiswahili": "sw",      "malay": "ms",
+    "filipino": "fil",     "tagalog": "fil",       "romanian": "ro",
+    "greek": "el",         "czech": "cs",          "hungarian": "hu",
+    "hebrew": "he",        "swedish": "sv",        "finnish": "fi",
+    "odia": "or",          "oriya": "or",
+    # Additional European
+    "norwegian": "no",     "danish": "da",         "slovak": "sk",
+    "bulgarian": "bg",     "croatian": "hr",       "serbian": "sr",
+    "slovenian": "sl",     "lithuanian": "lt",     "latvian": "lv",
+    "estonian": "et",      "catalan": "ca",        "galician": "gl",
+    "basque": "eu",        "welsh": "cy",          "irish": "ga",
+    "icelandic": "is",     "maltese": "mt",
+    # Middle East / Central Asia
+    "azerbaijani": "az",   "kazakh": "kk",         "uzbek": "uz",
+    "kyrgyz": "ky",        "georgian": "ka",       "armenian": "hy",
+    # South / SE Asia
+    "sinhala": "si",       "sinhalese": "si",      "nepali": "ne",
+    "burmese": "my",       "myanmar": "my",        "khmer": "km",
+    "cambodian": "km",     "lao": "lo",            "mongolian": "mn",
+    "tibetan": "bo",
+    # East Asia
+    "taiwanese": "zh",
+    # Africa
+    "amharic": "am",       "yoruba": "yo",         "igbo": "ig",
+    "zulu": "zu",          "xhosa": "xh",          "somali": "so",
+    "afrikaans": "af",
 }
 
 
@@ -235,10 +313,19 @@ def _parse_lang_selection(text: str, current_page: int = 1) -> str | tuple | Non
     if t in LANGUAGE_MENU:
         return LANGUAGE_MENU[t]
 
-    # Free-text language name
+    # Free-text language name — check our comprehensive name map
     for name, code in _LANG_BY_NAME.items():
         if name in t:
             return code
+
+    # Last resort: auto-detect the language the user is TYPING IN
+    # e.g. user types "Telugu" in Telugu script → detect as "te"
+    try:
+        detected = detect_language(text)
+        if detected and detected != "en":
+            return ("autodetect", detected)
+    except Exception:
+        pass
 
     return None
 
@@ -384,17 +471,48 @@ async def process_message(request: Request):
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
                 return {"text": menu_text, "audio_b64": a64, "lang": "en"}
 
+            # Auto-detected language from what the user typed
+            if isinstance(result, tuple) and result[0] == "autodetect":
+                detected_code = result[1]
+                detected_label = LANGUAGE_LABELS.get(detected_code, detected_code.upper())
+                confirm_en = (
+                    f"It looks like you're writing in {detected_label}. "
+                    f"Would you like me to respond in {detected_label}?\n\n"
+                    "Reply 'yes' to confirm, or type a number/language name to choose differently."
+                )
+                state["pending_autodetect"] = detected_code
+                audio_out = text_to_speech_bytes(confirm_en, "en")
+                a64 = base64.b64encode(audio_out).decode() if audio_out else None
+                return {"text": confirm_en, "audio_b64": a64, "lang": "en"}
+
+            # User confirming auto-detected language
+            if result is None and state.get("pending_autodetect"):
+                t_lower = user_message.strip().lower()
+                if any(w in t_lower for w in ("yes", "ok", "sure", "correct", "right", "yeah")):
+                    result = state["pending_autodetect"]
+                else:
+                    state.pop("pending_autodetect", None)
+                    menu_text = _build_lang_menu_text(state["lang_page"])
+                    audio_out = text_to_speech_bytes(menu_text, "en")
+                    a64 = base64.b64encode(audio_out).decode() if audio_out else None
+                    return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+
             if result is None:
-                # Cannot parse — (re)show the current page
-                menu_text = _build_lang_menu_text(state["lang_page"])
-                audio_out = text_to_speech_bytes(menu_text, "en")
+                # Cannot parse — (re)show the current page with a hint
+                menu_text = (
+                    _build_lang_menu_text(state["lang_page"]) +
+                    "\n\n💡 You can also just type the language name, e.g. 'Norwegian' or 'Swahili'."
+                )
+                audio_out = text_to_speech_bytes(_build_lang_menu_text(state["lang_page"]), "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
                 return {"text": menu_text, "audio_b64": a64, "lang": "en"}
 
             lang_choice = result  # confirmed ISO code
 
-            # User chose a language — confirm and store
+            # User chose a language — confirm, persist, and store
             set_user_language(sender_id, lang_choice)
+            _redis_set_lang(sender_id, lang_choice)   # persist across restarts
+            state.pop("pending_autodetect", None)
             lang = lang_choice
             state["lang_confirmed"] = True
             state["awaiting_lang"]  = False

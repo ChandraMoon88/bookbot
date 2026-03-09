@@ -1,5 +1,5 @@
 import os
-import redis_client as redis_lib
+import redis as redis_lib
 
 _client = None
 
