@@ -56,7 +56,7 @@ async def receive_message(request: Request):
                     if audio_attachment:
                         audio_url = audio_attachment["payload"]["url"]
                         # Download audio
-                        async with httpx.AsyncClient(timeout=30.0) as client:
+                        async with httpx.AsyncClient(timeout=120.0) as client:
                             response = await client.get(
                                 audio_url,
                                 headers={"Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"},
@@ -91,7 +91,7 @@ async def call_processor_and_reply(
             "message": message,
             "audio_b64": audio_b64
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 f"{HF_PROCESSOR_URL}/process",
                 json=payload
@@ -124,7 +124,7 @@ async def send_text(recipient_id: str, message_text: str):
         "message": {"text": message_text}
     }
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             if response.status_code == 200:
                 print("Text sent successfully ✅")
@@ -148,7 +148,7 @@ async def send_audio(recipient_id: str, audio_bytes: bytes):
     }
     files = {"filedata": ("voice.mp3", audio_bytes, "audio/mpeg")}
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 url, headers=headers, data=data, files=files
             )
