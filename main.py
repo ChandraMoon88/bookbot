@@ -24,12 +24,10 @@ load_dotenv()
 async def _setup_messenger_profile():
     """
     Register the Get Started button and greeting text with Facebook.
-    Called once at Render startup — safe to call repeatedly (idempotent).
-    New users will see a 'Get Started' button → clicking it sends the
-    GET_STARTED postback → bot replies with the language selection menu.
+    Called once at Render startup.
     """
     if not PAGE_ACCESS_TOKEN:
-        print("⚠️  PAGE_ACCESS_TOKEN missing — skipping Messenger profile setup.", flush=True)
+        print("WARNING: PAGE_ACCESS_TOKEN missing - skipping Messenger profile setup.", flush=True)
         return
     url     = "https://graph.facebook.com/v17.0/me/messenger_profile"
     headers = {"Content-Type": "application/json",
@@ -39,8 +37,20 @@ async def _setup_messenger_profile():
         "greeting": [
             {
                 "locale":  "default",
-                "text":    "👋 Hi {{user_first_name}}! Welcome to BookBot 🏨\n"
-                           "Tap 'Get Started' to choose your language and begin!",
+                "text":    "Hi {{user_first_name}}! Welcome to BookBot."
+                           " Tap Get Started to choose your language and begin.",
+            }
+        ],
+        "persistent_menu": [
+            {
+                "locale": "default",
+                "composer_input_disabled": False,
+                "call_to_actions": [
+                    {"type": "postback", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
+                    {"type": "postback", "title": "Help",            "payload": "ACTION_HELP"},
+                    {"type": "postback", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+                    {"type": "postback", "title": "Start Over",      "payload": "RESTART"},
+                ],
             }
         ],
     }
@@ -48,11 +58,11 @@ async def _setup_messenger_profile():
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
         if resp.status_code == 200:
-            print("✅ Messenger profile (Get Started + greeting) registered.", flush=True)
+            print("Messenger profile registered (Get Started + persistent menu).", flush=True)
         else:
-            print(f"⚠️  Messenger profile setup failed: {resp.text}", flush=True)
+            print(f"Messenger profile setup failed: {resp.text}", flush=True)
     except Exception as e:
-        print(f"⚠️  Messenger profile setup error: {e}", flush=True)
+        print(f"Messenger profile setup error: {e}", flush=True)
 
 
 @asynccontextmanager
@@ -131,15 +141,30 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
             for event in entry.get("messaging", []):
                 sender_id = event["sender"]["id"]
 
-                # ── Get started button ────────────────────────────────────────
+                # -- Get started / restart postbacks ---------------------------
                 if "postback" in event:
-                    pb_mid = event["postback"].get("mid", "")
+                    pb = event["postback"]
+                    pb_mid = pb.get("mid", "")
                     if pb_mid and _is_duplicate(pb_mid):
                         print(f"Duplicate postback mid={pb_mid}, skipping.", flush=True)
                         continue
-                    if event["postback"].get("payload") == "GET_STARTED":
+                    payload_val = pb.get("payload", "")
+                    if payload_val == "GET_STARTED":
                         background_tasks.add_task(
-                            call_processor_and_reply, sender_id, "hello", "text"
+                            call_processor_and_reply, sender_id, "GET_STARTED", "text"
+                        )
+                    elif payload_val == "RESTART":
+                        background_tasks.add_task(
+                            call_processor_and_reply, sender_id, "RESTART", "text"
+                        )
+                    elif payload_val in ("ACTION_BOOK", "ACTION_HELP", "ACTION_CHANGE_LANG"):
+                        background_tasks.add_task(
+                            call_processor_and_reply, sender_id, payload_val, "text"
+                        )
+                    elif payload_val.startswith("LANG_"):
+                        # Language selection button tapped
+                        background_tasks.add_task(
+                            call_processor_and_reply, sender_id, payload_val[5:], "text"
                         )
 
                 # ── Text or voice message ─────────────────────────────────────
@@ -188,7 +213,7 @@ async def handle_voice(sender_id: str, audio_url: str):
         await call_processor_and_reply(sender_id, None, "voice", audio_b64)
     except Exception as e:
         print(f"handle_voice error: {e}", flush=True)
-        await send_text(sender_id, "Sorry, I couldn't process your voice message.")
+        await send_text(sender_id, "Sorry, I could not process your voice message.")
 
 
 async def call_processor_and_reply(
@@ -217,7 +242,7 @@ async def call_processor_and_reply(
             print(f"HF Spaces unreachable (cold-start?): {hc_err}", flush=True)
             await send_text(
                 sender_id,
-                "I'm waking up ⏳ — please send your message again in 1–2 minutes!",
+                "I am waking up. Please send your message again in 1-2 minutes.",
             )
             return
 
@@ -225,7 +250,7 @@ async def call_processor_and_reply(
             print("HF Spaces still warming up.", flush=True)
             await send_text(
                 sender_id,
-                "I'm warming up ⏳ — please send your message again in 1–2 minutes!",
+                "I am warming up. Please send your message again in 1-2 minutes.",
             )
             return
 
@@ -243,17 +268,21 @@ async def call_processor_and_reply(
 
         print(f"HF response: {str(result)[:150]}", flush=True)
 
-        # ── Send text reply ───────────────────────────────────────────────────
         text = result.get("text", "Sorry, something went wrong.")
         await send_text(sender_id, text)
 
-        # ── Send audio reply if available ─────────────────────────────────────
+        # -- Send quick-reply buttons if provided ------------------------------
+        buttons = result.get("buttons", [])
+        if buttons:
+            await send_quick_replies(sender_id, "What would you like to do?", buttons)
+
+        # -- Send audio reply if available -------------------------------------
         if result.get("audio_b64"):
             await send_audio(sender_id, base64.b64decode(result["audio_b64"]))
 
     except Exception as e:
         print(f"call_processor_and_reply error: {e}", flush=True)
-        await send_text(sender_id, "Sorry, I'm having trouble right now.")
+        await send_text(sender_id, "Sorry, I am having trouble right now. Please try again.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,6 +307,29 @@ async def send_text(recipient_id: str, message_text: str):
             print(f"send_text ERROR: {resp.text}", flush=True)
     except Exception as e:
         print(f"send_text error: {e}", flush=True)
+
+
+async def send_quick_replies(recipient_id: str, prompt_text: str, buttons: list):
+    """Send a message with Messenger quick-reply buttons (max 13)."""
+    url     = "https://graph.facebook.com/v17.0/me/messages"
+    headers = {
+        "Content-Type":  "application/json",
+        "Authorization": f"Bearer {PAGE_ACCESS_TOKEN}",
+    }
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {
+            "text":          prompt_text,
+            "quick_replies": buttons[:13],
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code != 200:
+            print(f"send_quick_replies ERROR: {resp.text}", flush=True)
+    except Exception as e:
+        print(f"send_quick_replies error: {e}", flush=True)
 
 
 async def send_audio(recipient_id: str, audio_bytes: bytes):

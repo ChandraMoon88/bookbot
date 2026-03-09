@@ -98,7 +98,7 @@ app = FastAPI(lifespan=lifespan)
 # ─────────────────────────────────────────────────────────────────────────────
 
 WARMING_UP_MESSAGE = (
-    "I'm just starting up ⏳ — please send your message again in 1–2 minutes!"
+    "I'm just starting up. Please send your message again in 1-2 minutes."
 )
 
 # ── Per-user session state ────────────────────────────────────────────────────
@@ -109,13 +109,20 @@ _redis_conn = None
 
 
 def _get_redis_conn():
-    """Return a Redis connection if REDIS_URL is set, otherwise None."""
+    """Return a Redis connection if REDIS_URL is set, otherwise None.
+    Upstash Redis requires SSL — use ssl_cert_reqs=None to allow self-signed certs.
+    """
     global _redis_conn
     if _redis_conn is None and _redis_lib is not None:
         url = os.getenv("REDIS_URL")
         if url:
             try:
-                _redis_conn = _redis_lib.from_url(url, decode_responses=True)
+                # ssl_cert_reqs=None is required for Upstash (and most managed Redis)
+                _redis_conn = _redis_lib.from_url(
+                    url,
+                    decode_responses=True,
+                    ssl_cert_reqs=None,
+                )
                 _redis_conn.ping()
                 print("[redis] Connected — language preferences will persist across restarts.",
                       flush=True)
@@ -168,49 +175,49 @@ def _get_state(sender_id: str) -> dict:
 # Page 1 — top 20 by global speakers
 _LANG_PAGE1 = [
     ("1",  "en",  "English"),
-    ("2",  "zh",  "Chinese (中文)"),
-    ("3",  "hi",  "Hindi (हिंदी)"),
-    ("4",  "es",  "Spanish (Español)"),
-    ("5",  "fr",  "French (Français)"),
-    ("6",  "ar",  "Arabic (العربية)"),
-    ("7",  "bn",  "Bengali (বাংলা)"),
-    ("8",  "pt",  "Portuguese (Português)"),
-    ("9",  "ru",  "Russian (Русский)"),
-    ("10", "ur",  "Urdu (اردو)"),
-    ("11", "id",  "Indonesian (Bahasa)"),
-    ("12", "de",  "German (Deutsch)"),
-    ("13", "ja",  "Japanese (日本語)"),
-    ("14", "te",  "Telugu (తెలుగు)"),
-    ("15", "ta",  "Tamil (தமிழ்)"),
-    ("16", "mr",  "Marathi (मराठी)"),
-    ("17", "tr",  "Turkish (Türkçe)"),
-    ("18", "ko",  "Korean (한국어)"),
-    ("19", "it",  "Italian (Italiano)"),
-    ("20", "ml",  "Malayalam (മലയാളം)"),
+    ("2",  "zh",  "Chinese"),
+    ("3",  "hi",  "Hindi"),
+    ("4",  "es",  "Spanish"),
+    ("5",  "fr",  "French"),
+    ("6",  "ar",  "Arabic"),
+    ("7",  "bn",  "Bengali"),
+    ("8",  "pt",  "Portuguese"),
+    ("9",  "ru",  "Russian"),
+    ("10", "ur",  "Urdu"),
+    ("11", "id",  "Indonesian"),
+    ("12", "de",  "German"),
+    ("13", "ja",  "Japanese"),
+    ("14", "te",  "Telugu"),
+    ("15", "ta",  "Tamil"),
+    ("16", "mr",  "Marathi"),
+    ("17", "tr",  "Turkish"),
+    ("18", "ko",  "Korean"),
+    ("19", "it",  "Italian"),
+    ("20", "ml",  "Malayalam"),
 ]
 
 # Page 2 — next 20 by global speakers
 _LANG_PAGE2 = [
-    ("21", "kn",  "Kannada (ಕನ್ನಡ)"),
-    ("22", "gu",  "Gujarati (ગુજરાતી)"),
-    ("23", "pa",  "Punjabi (ਪੰਜਾਬੀ)"),
-    ("24", "pl",  "Polish (Polski)"),
-    ("25", "uk",  "Ukrainian (Українська)"),
-    ("26", "nl",  "Dutch (Nederlands)"),
-    ("27", "th",  "Thai (ภาษาไทย)"),
-    ("28", "vi",  "Vietnamese (Tiếng Việt)"),
-    ("29", "fa",  "Persian (فارسی)"),
-    ("30", "sw",  "Swahili (Kiswahili)"),
-    ("31", "ms",  "Malay (Bahasa Melayu)"),
-    ("32", "fil", "Filipino (Tagalog)"),
-    ("33", "ro",  "Romanian (Română)"),
-    ("34", "el",  "Greek (Ελληνικά)"),
-    ("35", "cs",  "Czech (Čeština)"),
-    ("36", "hu",  "Hungarian (Magyar)"),
-    ("37", "he",  "Hebrew (עברית)"),
-    ("38", "sv",  "Swedish (Svenska)"),
-    ("39", "fi",  "Finnish (Suomi)"),
-    ("40", "or",  "Odia (ଓଡ଼ିଆ)"),
+    ("21", "kn",  "Kannada"),
+    ("22", "gu",  "Gujarati"),
+    ("23", "pa",  "Punjabi"),
+    ("24", "pl",  "Polish"),
+    ("25", "uk",  "Ukrainian"),
+    ("26", "nl",  "Dutch"),
+    ("27", "th",  "Thai"),
+    ("28", "vi",  "Vietnamese"),
+    ("29", "fa",  "Persian"),
+    ("30", "sw",  "Swahili"),
+    ("31", "ms",  "Malay"),
+    ("32", "fil", "Filipino"),
+    ("33", "ro",  "Romanian"),
+    ("34", "el",  "Greek"),
+    ("35", "cs",  "Czech"),
+    ("36", "hu",  "Hungarian"),
+    ("37", "he",  "Hebrew"),
+    ("38", "sv",  "Swedish"),
+    ("39", "fi",  "Finnish"),
+    ("40", "or",  "Odia"),
 ]
 
 # Combined lookup: number → code
@@ -268,19 +275,48 @@ _LANG_BY_NAME: dict[str, str] = {
 }
 
 
+def _strip_for_tts(text: str) -> str:
+    """Remove markdown and formatting symbols before passing text to TTS."""
+    import re
+    # Remove markdown italic/bold wrappers like _(text)_
+    text = re.sub(r'_\(([^)]+)\)_', r'\1', text)
+    # Remove bullet characters
+    text = re.sub(r'^[•*-] ', '', text, flags=re.MULTILINE)
+    # Remove checkmark symbols
+    text = text.replace('\u2705', '').replace('\u274c', '')
+    # Collapse multiple blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def _build_lang_menu_text(page: int) -> str:
     items = _LANG_PAGE1 if page == 1 else _LANG_PAGE2
     lines = "\n".join(f"{num}. {label}" for num, _, label in items)
     if page == 1:
-        footer = "\nM — More languages (21–40)\nOr type any language name, e.g. 'Portuguese'"
+        footer = "\nM - More languages (21-40)\nOr type any language name, e.g. Portuguese"
     else:
-        footer = "\nB — Back to previous page (1–20)\nOr type any language name, e.g. 'Swahili'"
+        footer = "\nB - Back to previous page (1-20)\nOr type any language name, e.g. Swahili"
     return (
-        "Welcome to BookBot! 🏨\n\n"
+        "Welcome to BookBot!\n\n"
         "Please choose your language:\n\n"
         + lines + footer +
-        "\n\nReply with a number, letter, or language name 😊"
+        "\n\nReply with a number or language name."
     )
+
+
+def _build_lang_buttons(page: int) -> list:
+    """Build Messenger quick-reply button list for the language menu."""
+    items = _LANG_PAGE1 if page == 1 else _LANG_PAGE2
+    buttons = [
+        {"content_type": "text", "title": label, "payload": f"LANG_{code}"}
+        for _, code, label in items
+    ]
+    if page == 1:
+        buttons.append({"content_type": "text", "title": "More (21-40)", "payload": "LANG_PAGE_2"})
+    else:
+        buttons.append({"content_type": "text", "title": "Back (1-20)", "payload": "LANG_PAGE_1"})
+    # Facebook allows max 13 quick replies
+    return buttons[:13]
 
 
 LANGUAGE_SELECTION_MSG = _build_lang_menu_text(1)
@@ -335,6 +371,7 @@ def _human_response(en_text: str) -> str | None:
     Returns a natural, human-like English response for conversational inputs.
     Returns None if no intent matched (caller handles as unknown input).
     All text is English — translated to the user's language by the caller.
+    No emojis — clean plain text for correct TTS pronunciation.
     """
     t = en_text.strip().lower()
 
@@ -342,73 +379,73 @@ def _human_response(en_text: str) -> str | None:
     _greet_kw = {"hi", "hello", "hey", "hlo", "hii", "howdy", "yo", "sup", "greetings"}
     if any(t == kw or t.startswith(kw + " ") or t.startswith(kw + "!") for kw in _greet_kw):
         return (
-            "Hello there! 👋 So great to hear from you!\n\n"
-            "I'm BookBot, your hotel booking assistant. "
+            "Hello! Great to hear from you.\n\n"
+            "I am BookBot, your hotel booking assistant. "
             "How can I help you today?\n\n"
-            "Type 'book' to start a new hotel booking! 🏨"
+            "Tap Book a Hotel to get started."
         )
 
     # ── How are you ────────────────────────────────────────────────────────────
     if any(kw in t for kw in ("how are you", "how r u", "how are u", "hows it going", "how do you do")):
         return (
-            "I'm doing absolutely wonderful, thanks for asking! 😊\n\n"
-            "I'm all set and ready to help you find the perfect hotel. "
+            "I am doing well, thank you for asking.\n\n"
+            "I am ready to help you find the perfect hotel. "
             "What can I do for you today?"
         )
 
     # ── What's up ─────────────────────────────────────────────────────────────
     if any(kw in t for kw in ("what's up", "whats up")):
-        return "Not much, just here and ready to find you a great hotel! 😄 What can I do for you?"
+        return "Just here and ready to find you a great hotel. What can I do for you?"
 
     # ── Time-of-day greetings ─────────────────────────────────────────────────
     if "good morning" in t:
-        return "Good morning! ☀️ Hope your day is off to a fantastic start! I'm here to help with your hotel booking whenever you're ready. 😊"
+        return "Good morning! Hope your day is off to a great start. I am here to help with your hotel booking whenever you are ready."
     if "good afternoon" in t:
-        return "Good afternoon! 😊 Hope you're having a lovely day! How can I assist you with your hotel booking?"
+        return "Good afternoon! Hope you are having a lovely day. How can I assist you with your hotel booking?"
     if "good evening" in t:
-        return "Good evening! 🌙 Hope you had a wonderful day! I'm here to help you find a great hotel. 😊"
+        return "Good evening! Hope you had a wonderful day. I am here to help you find a great hotel."
     if "good night" in t:
-        return "Good night! 🌙 Sweet dreams! Come back anytime you need a hotel booking — I'm always here! 😊"
+        return "Good night! Come back anytime you need a hotel booking. I am always here."
 
     # ── Thanks ────────────────────────────────────────────────────────────────
     if any(kw in t for kw in ("thank you", "thanks", "thank u", "thx", "thankyou")):
-        return "You're most welcome! 😊 It's my absolute pleasure to help. Is there anything else I can do for you?"
+        return "You are most welcome. It is my pleasure to help. Is there anything else I can do for you?"
 
     # ── Goodbye ───────────────────────────────────────────────────────────────
     if any(kw in t for kw in ("bye", "goodbye", "see you", "take care", "good bye", "cya")):
-        return "Goodbye! 👋 It was lovely talking with you! Have a wonderful day and come back anytime. Take care! 😊"
+        return "Goodbye! It was lovely talking with you. Have a wonderful day and come back anytime."
 
     # ── Help / capabilities ───────────────────────────────────────────────────
     if any(kw in t for kw in ("what can you do", "what do you do", "help", "capabilities", "what are you", "who are you")):
         return (
-            "I'm BookBot — your personal hotel booking assistant! 🏨\n\n"
-            "Here's what I can do for you:\n"
-            "✅ Search hotels by city & dates\n"
-            "✅ Check room availability\n"
-            "✅ Make & manage your bookings\n"
-            "✅ Understand voice & text messages\n"
-            "✅ Talk to you in your own language\n\n"
-            "Just type 'book' to get started! 😊"
+            "I am BookBot, your personal hotel booking assistant.\n\n"
+            "Here is what I can do for you:\n"
+            "- Search hotels by city and dates\n"
+            "- Check room availability\n"
+            "- Make and manage your bookings\n"
+            "- Understand voice and text messages\n"
+            "- Talk to you in your own language\n\n"
+            "Tap Book a Hotel to get started."
         )
 
-    # ── Welcome / start / begin ────────────────────────────────────────────────
-    if any(kw in t for kw in ("welcome", "start", "begin")):
+    # ── Welcome / start / begin / get started ─────────────────────────────────
+    if any(kw in t for kw in ("welcome", "start", "begin", "get started", "get_started")):
         return (
-            "Welcome! Great to have you here! 🎉\n\n"
-            "I'm BookBot, your hotel booking assistant.\n"
-            "Type 'book' to start a new booking, or ask me anything! 🏨"
+            "Welcome! Great to have you here.\n\n"
+            "I am BookBot, your hotel booking assistant.\n"
+            "Tap Book a Hotel to start a new booking, or tap Help to see what I can do."
         )
 
     # ── Book / reserve ────────────────────────────────────────────────────────
     if any(kw in t for kw in ("book", "booking", "reserve", "reservation", "hotel", "room")):
         return (
-            "Awesome! Let's find you the perfect hotel! 🏨\n\n"
-            "To get started, I'll need a few details:\n\n"
-            "📍 Which city are you looking in?\n"
-            "📅 What's your check-in date?\n"
-            "📅 What's your check-out date?\n"
-            "👥 How many guests?\n\n"
-            "Let's start — which city would you like to stay in? 😊"
+            "Let us find you the perfect hotel.\n\n"
+            "To get started, I will need a few details:\n"
+            "- Which city are you looking in?\n"
+            "- What is your check-in date?\n"
+            "- What is your check-out date?\n"
+            "- How many guests?\n\n"
+            "Which city would you like to stay in?"
         )
 
     return None
@@ -430,7 +467,7 @@ async def health():
 @app.post("/process")
 async def process_message(request: Request):
     if not _models_ready:
-        return {"text": WARMING_UP_MESSAGE, "audio_b64": None, "lang": "en"}
+        return {"text": WARMING_UP_MESSAGE, "buttons": [], "audio_b64": None, "lang": "en"}
 
     try:
         data         = await request.json()
@@ -444,22 +481,30 @@ async def process_message(request: Request):
         if message_type == "voice":
             audio_b64_in = data.get("audio_b64")
             raw_bytes    = base64.b64decode(audio_b64_in)
-            # Pass the user's confirmed language as a hint so Whisper biases
-            # toward the right script (critical for Indian languages).
             user_message, stt_lang = speech_to_text(
                 raw_bytes, lang_hint=lang if state["lang_confirmed"] else None
             )
             if not user_message:
                 return {
-                    "text":      "Sorry, I couldn't understand that. Could you please try again? 😊",
+                    "text":      "Sorry, I could not understand that audio. Please try again.",
+                    "buttons":   [],
                     "audio_b64": None,
                     "lang":      lang,
                 }
         else:
             user_message = data.get("message", "")
 
+        # ── Restart / refresh postback — reset user state completely ───────────
+        if user_message.strip().upper() in ("RESTART", "REFRESH", "START_OVER"):
+            _user_states.pop(sender_id, None)
+            set_user_language(sender_id, "en")
+            _redis_set_lang(sender_id, "en")
+            state = _get_state(sender_id)
+            # Force language selection flow
+            state["awaiting_lang"] = True
+            state["lang_confirmed"] = False
+
         # ── Step 2: Language selection flow ────────────────────────────────────
-        # Every new user (and any user who requested a language change) goes here.
         if state["awaiting_lang"]:
             result = _parse_lang_selection(user_message, state["lang_page"])
 
@@ -467,23 +512,29 @@ async def process_message(request: Request):
             if isinstance(result, tuple) and result[0] == "page":
                 state["lang_page"] = result[1]
                 menu_text = _build_lang_menu_text(result[1])
-                audio_out = text_to_speech_bytes(menu_text, "en")
+                buttons   = _build_lang_buttons(result[1])
+                tts_text  = _strip_for_tts(menu_text)
+                audio_out = text_to_speech_bytes(tts_text, "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
-                return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+                return {"text": menu_text, "buttons": buttons, "audio_b64": a64, "lang": "en"}
 
             # Auto-detected language from what the user typed
             if isinstance(result, tuple) and result[0] == "autodetect":
-                detected_code = result[1]
+                detected_code  = result[1]
                 detected_label = LANGUAGE_LABELS.get(detected_code, detected_code.upper())
                 confirm_en = (
-                    f"It looks like you're writing in {detected_label}. "
+                    f"It looks like you are writing in {detected_label}. "
                     f"Would you like me to respond in {detected_label}?\n\n"
-                    "Reply 'yes' to confirm, or type a number/language name to choose differently."
+                    "Tap Yes to confirm, or choose a different language below."
                 )
                 state["pending_autodetect"] = detected_code
+                confirm_buttons = [
+                    {"content_type": "text", "title": "Yes",              "payload": f"LANG_{detected_code}"},
+                    {"content_type": "text", "title": "Choose different", "payload": "LANG_PAGE_1"},
+                ]
                 audio_out = text_to_speech_bytes(confirm_en, "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
-                return {"text": confirm_en, "audio_b64": a64, "lang": "en"}
+                return {"text": confirm_en, "buttons": confirm_buttons, "audio_b64": a64, "lang": "en"}
 
             # User confirming auto-detected language
             if result is None and state.get("pending_autodetect"):
@@ -493,25 +544,29 @@ async def process_message(request: Request):
                 else:
                     state.pop("pending_autodetect", None)
                     menu_text = _build_lang_menu_text(state["lang_page"])
-                    audio_out = text_to_speech_bytes(menu_text, "en")
+                    buttons   = _build_lang_buttons(state["lang_page"])
+                    tts_text  = _strip_for_tts(menu_text)
+                    audio_out = text_to_speech_bytes(tts_text, "en")
                     a64 = base64.b64encode(audio_out).decode() if audio_out else None
-                    return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+                    return {"text": menu_text, "buttons": buttons, "audio_b64": a64, "lang": "en"}
 
             if result is None:
-                # Cannot parse — (re)show the current page with a hint
+                # Cannot parse — re-show the current page
                 menu_text = (
                     _build_lang_menu_text(state["lang_page"]) +
-                    "\n\n💡 You can also just type the language name, e.g. 'Norwegian' or 'Swahili'."
+                    "\n\nYou can also type the language name, e.g. Norwegian or Swahili."
                 )
-                audio_out = text_to_speech_bytes(_build_lang_menu_text(state["lang_page"]), "en")
+                buttons   = _build_lang_buttons(state["lang_page"])
+                tts_text  = _strip_for_tts(_build_lang_menu_text(state["lang_page"]))
+                audio_out = text_to_speech_bytes(tts_text, "en")
                 a64 = base64.b64encode(audio_out).decode() if audio_out else None
-                return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+                return {"text": menu_text, "buttons": buttons, "audio_b64": a64, "lang": "en"}
 
             lang_choice = result  # confirmed ISO code
 
             # User chose a language — confirm, persist, and store
             set_user_language(sender_id, lang_choice)
-            _redis_set_lang(sender_id, lang_choice)   # persist across restarts
+            _redis_set_lang(sender_id, lang_choice)
             state.pop("pending_autodetect", None)
             lang = lang_choice
             state["lang_confirmed"] = True
@@ -519,55 +574,69 @@ async def process_message(request: Request):
 
             label   = LANGUAGE_LABELS.get(lang_choice, "English")
             body_en = (
-                f"Perfect! I'll respond in {label} from now on. 😊\n\n"
-                "Welcome to BookBot! 🏨\n"
-                "I'm your hotel booking assistant.\n\n"
-                "Here's what I can do:\n"
-                "✅ Search & book hotel rooms\n"
-                "✅ Check room availability\n"
-                "✅ Manage your reservations\n\n"
-                "Type 'book' to start your first booking!"
+                f"Language set to {label}.\n\n"
+                "Welcome to BookBot!\n"
+                "I am your hotel booking assistant.\n\n"
+                "What I can do for you:\n"
+                "- Search and book hotel rooms\n"
+                "- Check room availability\n"
+                "- Manage your reservations\n\n"
+                "Tap Book a Hotel to start your first booking."
             )
             body_text = translate_to(body_en, lang_choice) if lang_choice != "en" else body_en
-            full_text = body_text + "\n\n_(💬 Type 'change language' anytime to switch)_"
-            audio_out = text_to_speech_bytes(body_text, lang_choice)
+            full_text = body_text + "\n\nType 'change language' anytime to switch."
+            tts_text  = _strip_for_tts(body_text)
+            audio_out = text_to_speech_bytes(tts_text, lang_choice)
             a64 = base64.b64encode(audio_out).decode() if audio_out else None
-            return {"text": full_text, "audio_b64": a64, "lang": lang_choice}
+            main_buttons = [
+                {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
+                {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+            ]
+            return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang_choice}
 
         # ── Step 3: Normal conversation (language already confirmed) ───────────
-        # Always respond in the user's chosen language regardless of input language.
         input_lang    = stt_lang or detect_language(user_message)
         english_input = translate_to_english(user_message, input_lang)
         en_lower      = english_input.strip().lower()
 
-        # Check if user wants to change language
-        if (
-            any(trigger in en_lower for trigger in _CHANGE_LANG_TRIGGERS)
-            or "change language" in user_message.lower()
-        ):
+        # Handle quick-reply button payloads
+        raw_upper = user_message.strip().upper()
+        if raw_upper == "ACTION_CHANGE_LANG" or any(trigger in en_lower for trigger in _CHANGE_LANG_TRIGGERS) or "change language" in user_message.lower():
             state["lang_confirmed"] = False
             state["awaiting_lang"]  = True
             state["lang_page"]      = 1
             menu_text = _build_lang_menu_text(1)
-            audio_out = text_to_speech_bytes(menu_text, "en")
+            buttons   = _build_lang_buttons(1)
+            tts_text  = _strip_for_tts(menu_text)
+            audio_out = text_to_speech_bytes(tts_text, "en")
             a64 = base64.b64encode(audio_out).decode() if audio_out else None
-            return {"text": menu_text, "audio_b64": a64, "lang": "en"}
+            return {"text": menu_text, "buttons": buttons, "audio_b64": a64, "lang": "en"}
+
+        if raw_upper == "ACTION_BOOK":
+            en_lower = "book"
+        elif raw_upper == "ACTION_HELP":
+            en_lower = "help"
 
         # Get a natural human-like response (in English), then translate
         bot_en = _human_response(en_lower) or (
-            "I'm not sure I understood that. Here's what I can help with:\n\n"
-            "• Type 'book' — to start a hotel booking 🏨\n"
-            "• Type 'help' — to see all my features\n"
-            "• Type 'change language' — to switch your language"
+            "I am not sure I understood that. Here is what I can help with:\n\n"
+            "- Tap Book a Hotel to start a hotel booking\n"
+            "- Tap Help to see all my features\n"
+            "- Tap Change Language to switch your language"
         )
         response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
-
-        # Hint appended to text only (not read aloud by TTS)
-        full_text = response_text + "\n\n_(💬 Type 'change language' anytime to switch)_"
-        audio_out = text_to_speech_bytes(response_text, lang)
+        full_text     = response_text + "\n\nType 'change language' anytime to switch."
+        tts_text      = _strip_for_tts(response_text)
+        audio_out     = text_to_speech_bytes(tts_text, lang)
         a64 = base64.b64encode(audio_out).decode() if audio_out else None
-        return {"text": full_text, "audio_b64": a64, "lang": lang}
+        main_buttons = [
+            {"content_type": "text", "title": "Book a Hotel",    "payload": "ACTION_BOOK"},
+            {"content_type": "text", "title": "Help",            "payload": "ACTION_HELP"},
+            {"content_type": "text", "title": "Change Language", "payload": "ACTION_CHANGE_LANG"},
+        ]
+        return {"text": full_text, "buttons": main_buttons, "audio_b64": a64, "lang": lang}
 
     except Exception as e:
         logger.error(f"Processing error: {e}", exc_info=True)
-        return {"text": "Sorry, something went wrong. Please try again! 😊", "audio_b64": None, "lang": "en"}
+        return {"text": "Sorry, something went wrong. Please try again.", "buttons": [], "audio_b64": None, "lang": "en"}
