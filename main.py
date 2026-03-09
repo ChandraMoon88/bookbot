@@ -15,6 +15,7 @@ import httpx
 import os
 import json
 import base64
+import time
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -26,6 +27,25 @@ HF_PROCESSOR_URL  = os.getenv("HF_PROCESSOR_URL", "").rstrip("/")
 
 print(f"TOKEN LOADED: {PAGE_ACCESS_TOKEN[:20] if PAGE_ACCESS_TOKEN else 'NOT FOUND!'}", flush=True)
 print(f"HF URL: {HF_PROCESSOR_URL}", flush=True)
+
+# ── Message deduplication (prevents duplicate replies from Facebook retries) ──
+# Facebook retries a webhook up to 5–7 times if it doesn't get 200 within 20 s.
+# When Render has a cold-start the 200 arrives late, so Facebook retries.
+# We track seen message IDs for 5 minutes to silently drop duplicates.
+_processed_mids: dict[str, float] = {}
+_MID_TTL = 300  # seconds
+
+
+def _is_duplicate(mid: str) -> bool:
+    """Return True if this mid was already processed recently."""
+    now = time.time()
+    # Prune expired entries
+    for k in [k for k, t in list(_processed_mids.items()) if now - t > _MID_TTL]:
+        _processed_mids.pop(k, None)
+    if mid in _processed_mids:
+        return True
+    _processed_mids[mid] = now
+    return False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HEALTH
@@ -71,6 +91,10 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
                 # ── Get started button ────────────────────────────────────────
                 if "postback" in event:
+                    pb_mid = event["postback"].get("mid", "")
+                    if pb_mid and _is_duplicate(pb_mid):
+                        print(f"Duplicate postback mid={pb_mid}, skipping.", flush=True)
+                        continue
                     if event["postback"].get("payload") == "GET_STARTED":
                         background_tasks.add_task(
                             call_processor_and_reply, sender_id, "hello", "text"
@@ -78,7 +102,12 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
 
                 # ── Text or voice message ─────────────────────────────────────
                 elif "message" in event:
-                    msg         = event["message"]
+                    msg = event["message"]
+                    mid = msg.get("mid", "")
+                    if mid and _is_duplicate(mid):
+                        print(f"Duplicate mid={mid}, skipping.", flush=True)
+                        continue
+
                     attachments = msg.get("attachments", [])
                     audio_att   = next(
                         (a for a in attachments if a.get("type") == "audio"), None
@@ -129,9 +158,26 @@ async def call_processor_and_reply(
     """Check HF Spaces is ready, call /process, send reply to Messenger."""
     try:
         # ── Check if HF Spaces models are ready ───────────────────────────────
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            h      = await client.get(f"{HF_PROCESSOR_URL}/health")
-            health = h.json()
+        # Use a 30-second timeout — HF Spaces free tier can be slow to respond.
+        # Wrap in its own try/except so a cold-starting / sleeping Space sends a
+        # friendly "waking up" message instead of the generic "Sorry" error.
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                h = await client.get(f"{HF_PROCESSOR_URL}/health")
+            if h.status_code != 200:
+                raise RuntimeError(f"Health check HTTP {h.status_code}")
+            try:
+                health = h.json()
+            except Exception:
+                # HF Spaces returns an HTML loading page during cold-start
+                health = {}
+        except Exception as hc_err:
+            print(f"HF Spaces unreachable (cold-start?): {hc_err}", flush=True)
+            await send_text(
+                sender_id,
+                "I'm waking up ⏳ — please send your message again in 1–2 minutes!",
+            )
+            return
 
         if not health.get("models_ready", False):
             print("HF Spaces still warming up.", flush=True)
