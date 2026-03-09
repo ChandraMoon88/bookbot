@@ -1,0 +1,24 @@
+# rasa/endpoints.yml
+# ------------------------------------------------
+# External service endpoints for Rasa
+# ------------------------------------------------
+
+action_endpoint:
+  url: "${RASA_ACTIONS_URL}/webhook"
+
+tracker_store:
+  type: redis
+  url: "${REDIS_HOST}"
+  port: ${REDIS_PORT:-6379}
+  password: "${REDIS_PASSWORD}"
+  db: 0
+  key_prefix: "rasa:"
+
+event_broker:
+  type: kafka
+  url: "${KAFKA_BOOTSTRAP_SERVERS}"
+  topic: rasa.events
+  security_protocol: SASL_SSL
+  sasl_mechanism: PLAIN
+  sasl_plain_username: "${KAFKA_API_KEY}"
+  sasl_plain_password: "${KAFKA_API_SECRET}"
