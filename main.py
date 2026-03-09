@@ -9,6 +9,7 @@ Solution: return 200 to Facebook IMMEDIATELY, then process in
 a background task. Facebook never retries, no duplicate replies.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 import httpx
@@ -19,7 +20,48 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-app = FastAPI()
+
+async def _setup_messenger_profile():
+    """
+    Register the Get Started button and greeting text with Facebook.
+    Called once at Render startup — safe to call repeatedly (idempotent).
+    New users will see a 'Get Started' button → clicking it sends the
+    GET_STARTED postback → bot replies with the language selection menu.
+    """
+    if not PAGE_ACCESS_TOKEN:
+        print("⚠️  PAGE_ACCESS_TOKEN missing — skipping Messenger profile setup.", flush=True)
+        return
+    url     = "https://graph.facebook.com/v17.0/me/messenger_profile"
+    headers = {"Content-Type": "application/json",
+               "Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"}
+    payload = {
+        "get_started": {"payload": "GET_STARTED"},
+        "greeting": [
+            {
+                "locale":  "default",
+                "text":    "👋 Hi {{user_first_name}}! Welcome to BookBot 🏨\n"
+                           "Tap 'Get Started' to choose your language and begin!",
+            }
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code == 200:
+            print("✅ Messenger profile (Get Started + greeting) registered.", flush=True)
+        else:
+            print(f"⚠️  Messenger profile setup failed: {resp.text}", flush=True)
+    except Exception as e:
+        print(f"⚠️  Messenger profile setup error: {e}", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await _setup_messenger_profile()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 VERIFY_TOKEN      = os.getenv("VERIFY_TOKEN", "mybot123")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
