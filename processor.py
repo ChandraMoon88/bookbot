@@ -153,6 +153,16 @@ def _redis_set_lang(sender_id: str, lang: str) -> None:
             pass
 
 
+def _redis_del_lang(sender_id: str) -> None:
+    """Delete persisted language so the next _get_state() forces fresh language selection."""
+    r = _get_redis_conn()
+    if r:
+        try:
+            r.delete(f"bblang:{sender_id}")
+        except Exception:
+            pass
+
+
 def _get_state(sender_id: str) -> dict:
     if sender_id not in _user_states:
         # Try to restore language from Redis (survives HF Spaces restarts)
@@ -525,11 +535,16 @@ async def process_message(request: Request):
 
         # ── Restart / refresh postback — reset user state completely ───────────
         if user_message.strip().upper() in ("RESTART", "REFRESH", "START_OVER"):
-            _user_states.pop(sender_id, None)
+            # Delete Redis key BEFORE pre-creating state so _get_state() won't
+            # restore a previous language and silently skip language selection.
+            _redis_del_lang(sender_id)
             set_user_language(sender_id, "en")
-            _redis_set_lang(sender_id, "en")
-            # Return the welcome + language menu immediately (do NOT fall through
-            # to _parse_lang_selection — it would auto-detect "RESTART" as a language)
+            _user_states[sender_id] = {
+                "lang_confirmed":      False,
+                "awaiting_lang":       True,
+                "lang_page":           1,
+                "awaiting_type_input": False,
+            }
             welcome_en = (
                 "Welcome back to BookBot!\n\n"
                 "Let's start fresh. Choose your language:"
@@ -540,18 +555,25 @@ async def process_message(request: Request):
 
         # ── GET_STARTED: show welcome message + first page of language buttons ─
         if user_message.strip().upper() == "GET_STARTED":
-            _user_states.pop(sender_id, None)
-            state = _get_state(sender_id)
+            # Same as RESTART: wipe Redis + pre-create state so language selection
+            # is always shown, even if the user had a previously saved language.
+            _redis_del_lang(sender_id)
+            set_user_language(sender_id, "en")
+            _user_states[sender_id] = {
+                "lang_confirmed":      False,
+                "awaiting_lang":       True,
+                "lang_page":           1,
+                "awaiting_type_input": False,
+            }
             welcome_en = (
                 "Welcome to BookBot!\n\n"
                 "I am your hotel booking assistant.\n"
                 "I can search hotels, check availability, and make bookings.\n\n"
                 "First, choose your language:"
             )
-            lang_buttons = _build_lang_buttons(1)
-            audio_out    = text_to_speech_bytes(_strip_for_tts(welcome_en), "en")
+            audio_out = text_to_speech_bytes(_strip_for_tts(welcome_en), "en")
             a64 = base64.b64encode(audio_out).decode() if audio_out else None
-            return {"text": welcome_en, "buttons": lang_buttons, "audio_b64": a64, "lang": "en"}
+            return {"text": welcome_en, "buttons": _build_lang_buttons(1), "audio_b64": a64, "lang": "en"}
 
         # ── Step 2: Language selection flow ────────────────────────────────────
         if state["awaiting_lang"]:
