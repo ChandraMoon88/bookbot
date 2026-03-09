@@ -119,9 +119,11 @@ def _get_redis_conn():
         if url:
             try:
                 kwargs: dict = {"decode_responses": True}
-                if url.startswith("rediss://"):
+                if url.startswith("rediss://") or ".upstash.io" in url:
                     import ssl as _ssl
                     kwargs["ssl_cert_reqs"] = _ssl.CERT_NONE
+                    # Normalise scheme so the redis library uses TLS
+                    url = url.replace("redis://", "rediss://", 1)
                 _redis_conn = _redis_lib.from_url(url, **kwargs)
                 _redis_conn.ping()
                 print("[redis] Connected — language preferences will persist across restarts.",

@@ -15,8 +15,10 @@ def get_redis():
         if not url:
             raise RuntimeError("REDIS_URL environment variable is not set")
         kwargs = {"decode_responses": True}
-        if url.startswith("rediss://"):
+        if url.startswith("rediss://") or ".upstash.io" in url:
             kwargs["ssl_cert_reqs"] = _ssl.CERT_NONE
+            # Normalise scheme so the redis library uses TLS
+            url = url.replace("redis://", "rediss://", 1)
         _client = redis_lib.from_url(url, **kwargs)
     return _client
 
