@@ -40,7 +40,7 @@ async def _setup_messenger_profile():
             {
                 "locale":  "default",
                 "text":    "Hi {{user_first_name}}! Welcome to BookBot."
-                           " Tap Get Started to choose your language and begin.",
+                           " I am your 24/7 hotel booking assistant. Tap Get Started!",
             }
         ],
         "persistent_menu": [
@@ -48,10 +48,12 @@ async def _setup_messenger_profile():
                 "locale": "default",
                 "composer_input_disabled": False,
                 "call_to_actions": [
-                    {"type": "postback", "title": "Book a Hotel",     "payload": "ACTION_BOOK"},
-                    {"type": "postback", "title": "My Bookings",      "payload": "MY_BOOKINGS"},
-                    {"type": "postback", "title": "Change Language",  "payload": "ACTION_CHANGE_LANG"},
-                    {"type": "postback", "title": "Start Over",       "payload": "RESTART"},
+                    {"type": "postback", "title": "Book a Hotel",      "payload": "ACTION_BOOK"},
+                    {"type": "postback", "title": "My Bookings",       "payload": "MY_BOOKINGS"},
+                    {"type": "postback", "title": "Loyalty Rewards",   "payload": "LOYALTY_MENU"},
+                    {"type": "postback", "title": "Concierge",         "payload": "IN_STAY_MENU"},
+                    {"type": "postback", "title": "Change Language",   "payload": "ACTION_CHANGE_LANG"},
+                    {"type": "postback", "title": "Start Over",        "payload": "RESTART"},
                 ],
             }
         ],
@@ -173,17 +175,15 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                         background_tasks.add_task(
                             call_processor_and_reply, sender_id, "RESTART", "text"
                         )
-                    elif payload_val in ("ACTION_BOOK", "ACTION_HELP",
-                                        "ACTION_CHANGE_LANG",
-                                        "MY_BOOKINGS", "CANCEL_BOOKING",
-                                        "LOOKUP_BOOKING"):
-                        background_tasks.add_task(
-                            call_processor_and_reply, sender_id, payload_val, "text"
-                        )
                     elif payload_val.startswith("LANG_"):
-                        # Language selection button tapped
+                        # Language selection button tapped — strip LANG_ prefix
                         background_tasks.add_task(
                             call_processor_and_reply, sender_id, payload_val[5:], "text"
+                        )
+                    elif payload_val:
+                        # All other postbacks — forward raw payload to processor
+                        background_tasks.add_task(
+                            call_processor_and_reply, sender_id, payload_val, "text"
                         )
 
                 # -- Text or voice message, including quick reply taps ----------
@@ -219,20 +219,11 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                             background_tasks.add_task(
                                 call_processor_and_reply, sender_id, qr_payload[5:], "text"
                             )
-                        elif qr_payload.startswith((
-                            "HOTEL_", "ROOM_", "MEAL_",
-                            "CHECKIN_", "CHECKOUT_", "GUESTS_",
-                            "CONFIRM_", "CANCEL_", "SKIP_",
-                        )):
-                            # Structured booking-flow payloads — forward raw payload
+                        else:
+                            # All other quick-reply payloads — forward raw payload to processor
+                            # (loyalty, pre-arrival, in-stay, addon, payment, etc.)
                             background_tasks.add_task(
                                 call_processor_and_reply, sender_id, qr_payload, "text"
-                            )
-                        else:
-                            # Unknown payload — fall back to the button's display title
-                            user_message = msg.get("text", qr_payload)
-                            background_tasks.add_task(
-                                call_processor_and_reply, sender_id, user_message, "text"
                             )
                     else:
                         user_message = msg.get("text", "")
