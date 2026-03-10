@@ -1,24 +1,89 @@
 """
 services/search_service/ranker.py
 -----------------------------------
-Re-ranks ES hotel hits using guest preference vectors (Qdrant/LaBSE).
+Re-ranks hotel search hits using sentence-transformers (all-MiniLM-L6-v2).
+No external services required — runs on HF Space CPU.
 
 Scoring formula:
-  0.4 * ES_relevance + 0.3 * guest_rating + 0.2 * availability + 0.1 * personalization
+  0.4 * semantic_similarity + 0.3 * star_rating/5 + 0.2 * search_score + 0.1 * has_price
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL     = os.getenv("QDRANT_URL", "")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-HF_EMBED_URL   = os.getenv("HF_EMBED_URL", "")
-HF_TOKEN       = os.getenv("HF_TOKEN", "")
+# Lazy load — model is already warm from processor.py background loader
+_model = None
+
+
+def _get_model():
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _model
+
+
+def rank_hotels(
+    hits: list[dict],
+    psid: str | None = None,
+    top_k: int = 10,
+) -> list[dict]:
+    """
+    Re-rank PostgreSQL FTS results by composite score.
+    Falls back to star_rating sort if sentence-transformers unavailable.
+    """
+    if not hits:
+        return []
+
+    try:
+        from sentence_transformers import util as st_util
+        import torch
+
+        model = _get_model()
+
+        def _hotel_text(h: dict) -> str:
+            amenities = h.get("amenities") or []
+            return (
+                f"{h.get('name', '')} {h.get('city', '')} {h.get('country', '')} "
+                f"{h.get('description', '')[:200]} "
+                f"{' '.join(str(a) for a in amenities[:8])}"
+            ).strip()
+
+        # Use city as implicit query context
+        city = hits[0].get("city", "") if hits else ""
+        query = f"hotel {city} comfortable great amenities"
+
+        texts   = [_hotel_text(h) for h in hits]
+        q_emb   = model.encode(query, convert_to_tensor=True)
+        t_emb   = model.encode(texts,  convert_to_tensor=True)
+        sem_scores = st_util.cos_sim(q_emb, t_emb)[0].tolist()
+
+        scored = []
+        for h, sem in zip(hits, sem_scores):
+            stars     = float(h.get("star_rating", 3)) / 5.0
+            search_sc = min(1.0, float(h.get("search_score", 0.5)))
+            has_price = 1.0 if h.get("price_from_usd", 0) > 0 else 0.0
+            composite = (0.4 * float(sem) + 0.3 * stars
+                         + 0.2 * search_sc + 0.1 * has_price)
+            scored.append((composite, h))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [h for _, h in scored[:top_k]]
+
+    except Exception as exc:
+        logger.warning("rank_hotels semantic re-rank failed (%s) — fallback", exc)
+        # Fallback: sort by star_rating desc, price availability
+        return sorted(
+            hits,
+            key=lambda h: (float(h.get("star_rating", 0)),
+                           1.0 if h.get("price_from_usd", 0) > 0 else 0.0),
+            reverse=True,
+        )[:top_k]
+
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

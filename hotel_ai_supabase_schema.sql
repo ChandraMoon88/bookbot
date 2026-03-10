@@ -45,6 +45,22 @@ CREATE TABLE IF NOT EXISTS hotels (
 
 CREATE INDEX IF NOT EXISTS idx_hotels_city       ON hotels(city);
 CREATE INDEX IF NOT EXISTS idx_hotels_is_active  ON hotels(is_active);
+CREATE INDEX IF NOT EXISTS idx_hotels_star       ON hotels(star_rating);
+
+-- Full-text search index: name + description + city + country
+-- Run: CREATE EXTENSION IF NOT EXISTS pg_trgm; first if not enabled
+CREATE INDEX IF NOT EXISTS idx_hotels_fts ON hotels
+    USING gin(to_tsvector('simple',
+        COALESCE(name,'') || ' ' ||
+        COALESCE(description,'') || ' ' ||
+        COALESCE(city,'') || ' ' ||
+        COALESCE(country,'')
+    ));
+
+-- Trigram index for ILIKE searches on city and name (fast fuzzy)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_hotels_city_trgm ON hotels USING gin(city gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hotels_name_trgm ON hotels USING gin(name gin_trgm_ops);
 
 
 -- ── INVENTORY ─────────────────────────────────────────────────────────────────
