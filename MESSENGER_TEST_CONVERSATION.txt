@@ -4417,3 +4417,1710 @@ PREREQUISITES BEFORE TESTING
                   Coverage: 20 Booking Types | 40 Languages | 80+ Edge Cases
                      12 Payment Methods | 6 Platforms | Full Concierge
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART U  —  SEASONAL & EVENT BOOKING FLOWS
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U1 — NEW YEAR'S EVE BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Seasonal surge flow. Prices are 2–5× higher. Bot highlights packages.
+
+YOU ▶  I want to book a hotel for New Year's Eve in Dubai
+
+[SYS]  Detect special_event = "new_years_eve", city = "Dubai"
+[SYS]  Load NYE packages for Dubai properties
+[SYS]  Apply surge pricing multiplier from pricing_rules table
+
+BOT ◀  🎆 New Year's Eve in Dubai — Amazing Choice!
+
+       December 31st is our most popular night of the year.
+       I found 8 hotels with special NYE packages.
+
+       🏨 TOP NYE PACKAGES — DUBAI:
+
+       1. Atlantis The Palm ⭐⭐⭐⭐⭐
+          NYE Gala Dinner + Fireworks View Package
+          💰 $1,200/night (includes dinner for 2 + champagne)
+          🎆 Direct view of Palm Jumeirah fireworks
+          ✅ Limited rooms — 4 left
+
+       2. Burj Al Arab ⭐⭐⭐⭐⭐⭐⭐
+          Ultimate NYE Suite Experience
+          💰 $3,500/night (butler service, private fireworks terrace)
+          🍾 Midnight champagne tower included
+          ✅ 2 suites remaining
+
+       3. Sofitel Downtown Dubai ⭐⭐⭐⭐⭐
+          NYE Party Package + Countdown Rooftop Access
+          💰 $650/night (includes rooftop party + 2 drinks)
+          ✅ 12 rooms available
+
+       4. Hilton Dubai Creek ⭐⭐⭐⭐
+          Standard NYE Stay + Creek Fireworks
+          💰 $380/night (breakfast included)
+          ✅ 20 rooms available
+
+[BTN]  1 — Atlantis Palm
+[BTN]  2 — Burj Al Arab
+[BTN]  3 — Sofitel
+[BTN]  4 — Hilton Creek
+[BTN]  🔍 More options
+[BTN]  💰 Filter by budget
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U2 — CHRISTMAS HOLIDAY BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  Christmas week in London with family, 2 adults 3 kids
+
+[SYS]  Detect seasonal_event = "christmas", city = "London"
+[SYS]  family_filter = true, adults = 2, children = 3
+[SYS]  Load family-friendly properties with Christmas activities
+
+BOT ◀  🎄 Christmas in London — Magical for Families!
+
+       Searching family-friendly hotels with Christmas packages...
+       (2 adults + 3 children, Dec 23–Jan 1)
+
+       🏨 FAMILY CHRISTMAS PICKS — LONDON:
+
+       1. The Grosvenor Hotel Victoria ⭐⭐⭐⭐
+          Christmas Family Package
+          💰 £420/night | Family suite sleeps 5
+          🎅 Santa visit Dec 24 evening (for children)
+          🎄 Christmas Day lunch buffet included (all 5 guests)
+          ✅ 3 family suites left
+
+       2. Marriott Park Lane ⭐⭐⭐⭐⭐
+          Luxury Family Christmas
+          💰 £780/night | Connecting rooms option
+          🎁 Children's welcome gift (toys + activity pack)
+          🍳 Full English Christmas breakfast daily
+          ✅ Connecting rooms available
+
+       3. Premier Inn Westminster ⭐⭐⭐
+          Budget Family Stay
+          💰 £180/night | Family room (2 adults + 2 children)
+          ℹ️ Note: 3 children may need extra bed (£25/night)
+          ✅ 15 family rooms available
+
+[BTN]  1 — Grosvenor (Best Value)
+[BTN]  2 — Marriott (Premium)
+[BTN]  3 — Premier Inn (Budget)
+[BTN]  🎅 Show hotels with Santa events
+[BTN]  🎠 Show hotels near Harrods/Oxford St
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U3 — VALENTINE'S DAY ROMANTIC PACKAGE
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  surprise my girlfriend for Valentine's Day in Paris
+
+[SYS]  Detect romantic_occasion = "valentines", city = "Paris"
+[SYS]  Load romantic packages — rose petals, champagne, dinner for 2
+
+BOT ◀  💕 Valentine's Day in Paris — The Most Romantic City on Earth!
+
+       I'll help you create a truly unforgettable surprise.
+       Here are our most popular romantic packages:
+
+       🌹 VALENTINE'S SPECIAL — PARIS:
+
+       1. Hôtel Plaza Athénée ⭐⭐⭐⭐⭐
+          The Classic Paris Romance Package
+          💰 €850/night
+          Includes:
+          🌹 Rose petals on bed upon arrival
+          🍾 Bottle of Moët & Chandon champagne
+          🍓 Chocolate-covered strawberries
+          🛁 Rose petal bath drawn by butler
+          🌆 Eiffel Tower view room
+          💌 Personalized love letter from hotel on arrival
+
+       2. Hôtel Le Meurice ⭐⭐⭐⭐⭐
+          Royal Valentine Treatment
+          💰 €1,200/night
+          Includes: Private chef dinner in room,
+          Midnight Seine river cruise for 2,
+          Sunrise breakfast on private terrace
+
+       3. Boutique Hotel Saint Germain ⭐⭐⭐⭐
+          Intimate & Romantic
+          💰 €320/night
+          Includes: Couples massage, wine tasting,
+          Candle-lit dinner reservation at local bistro
+
+       Would you like to add a surprise message displayed
+       when she opens the room door?
+
+[BTN]  💌 Yes — add surprise message
+[BTN]  💐 Add flower arrangement upgrade
+[BTN]  💍 Add jewelry delivery service
+[BTN]  📸 Add professional photo session
+[BTN]  Choose Package 1 (Plaza Athénée)
+[BTN]  Choose Package 2 (Le Meurice)
+[BTN]  Choose Package 3 (Saint Germain)
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U4 — SUMMER PEAK SEASON BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  Maldives in August
+
+[SYS]  Detect peak_season = "summer_august", destination = "Maldives"
+[SYS]  Note: Maldives July–September is peak season, high demand
+
+BOT ◀  🌊 Maldives in August — Peak Season!
+
+       ⚠️ August is one of the busiest months for Maldives.
+       I recommend booking as early as possible to secure your villa.
+
+       CURRENT AVAILABILITY — MALDIVES RESORTS:
+
+       1. Sun Siyam Iru Fushi ⭐⭐⭐⭐⭐
+          🏝️ Overwater Villa | August 1–7
+          💰 $1,800/night | All-inclusive available
+          🤿 House reef snorkeling | Private pool
+          ✅ 2 villas remaining — book now!
+
+       2. Constance Moofushi ⭐⭐⭐⭐⭐
+          🏝️ Beach Villa | August 1–7
+          💰 $1,100/night | Half-board included
+          🦈 Whale shark season — guided dives available
+          ✅ 5 villas available
+
+       3. Adaaran Select Meedhupparu ⭐⭐⭐⭐
+          🏝️ Garden Villa | August 1–7
+          💰 $620/night | Full-board
+          🐢 Turtle nesting season — guided evening tours
+          ✅ Available (but filling fast)
+
+       🔔 Price Alert: Prices increase 25% after July 1st.
+       Lock in today's rate?
+
+[BTN]  🔒 Lock in rate for Villa 1
+[BTN]  🔒 Lock in rate for Villa 2
+[BTN]  🔒 Lock in rate for Villa 3
+[BTN]  📅 Flexible dates — show me cheaper options
+[BTN]  🔔 Set price alert for future
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U5 — RAMADAN & EID SPECIAL BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I need a hotel in Istanbul during Ramadan, halal food important
+
+[SYS]  Detect religious_context = "ramadan", city = "Istanbul"
+[SYS]  Filter: halal_certified = true, suhoor_service = true
+
+BOT ◀  رمضان كريم! Ramadan Mubarak! 🌙
+
+       I've filtered hotels in Istanbul with:
+       ✅ 100% Halal-certified kitchen
+       ✅ Suhoor (pre-dawn meal) room service available
+       ✅ Iftar buffet (featured)
+       ✅ Qibla direction in rooms + prayer mats provided
+       ✅ Nearby mosques listed
+
+       🏨 RAMADAN-FRIENDLY HOTELS — ISTANBUL:
+
+       1. Four Seasons Istanbul at Sultanahmet ⭐⭐⭐⭐⭐
+          💰 ₺8,500/night ($280)
+          🕌 Walking distance to Blue Mosque & Hagia Sophia
+          🌙 Daily Iftar buffet (120+ dishes)
+          ⏰ Suhoor room service until Fajr
+          📿 Prayer mat, Quran, Qibla compass in every room
+
+       2. CVK Park Bosphorus Hotel ⭐⭐⭐⭐⭐
+          💰 ₺6,200/night ($205)
+          🌊 Bosphorus Iftar dinner (outdoor terrace)
+          🌙 Tarawih prayers nearby (Dolmabahçe Mosque)
+          ✅ Ramadan special rate — 15% off
+
+       How many nights and dates?
+
+[BTN]  View Hotel 1 details
+[BTN]  View Hotel 2 details
+[BTN]  📿 Show ALL halal-certified hotels
+[BTN]  🕌 Must be near Grand Mosque
+[BTN]  🌙 Show Eid Al-Fitr packages
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U6 — CONFERENCE & TRADE SHOW BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  attending CES in Las Vegas, January 7-10, single room, need fast wifi
+
+[SYS]  Detect event = "CES_conference", city = "Las Vegas"
+[SYS]  dates = "Jan 7-10", single_traveler = true, priority = "fast_wifi"
+[SYS]  Note: CES period = extreme demand surge in Las Vegas
+
+BOT ◀  💡 CES Las Vegas — I see you're a tech professional!
+
+       ⚠️ CES week is one of Las Vegas's most booked periods.
+       Hotels within 0.5 miles of LVCC fill up fast.
+
+       Searching hotels near Las Vegas Convention Center...
+
+       🏨 TOP PICKS — CES ATTENDEES:
+
+       1. Renaissance Las Vegas Hotel ⭐⭐⭐⭐
+          📍 0.3 miles to LVCC North Hall
+          💰 $420/night (CES week rate)
+          🌐 Wi-Fi: 500 Mbps dedicated business line
+          💼 Business center open 24/7
+          🚌 Free shuttle to all LVCC halls
+          ✅ Last 3 rooms!
+
+       2. Westgate Las Vegas Resort ⭐⭐⭐⭐
+          📍 Adjacent to LVCC
+          💰 $380/night
+          🌐 Wi-Fi: 1 Gbps fiber (verified)
+          🖥️ In-room work desk setup
+          ✅ Available
+
+       3. Marriott's Grand Chateau ⭐⭐⭐⭐
+          📍 1.2 miles, free LVCC shuttle
+          💰 $290/night (suite with full kitchen)
+          🌐 Wi-Fi: 200 Mbps
+          ☕ In-suite kitchen — save on meals
+          ✅ Good availability
+
+       Would you like me to add:
+       💼 Business invoice for expense claim?
+
+[BTN]  Book Hotel 1 (Renaissance)
+[BTN]  Book Hotel 2 (Westgate)
+[BTN]  Book Hotel 3 (Grand Chateau)
+[BTN]  💼 Yes, need business invoice
+[BTN]  🗺️ Show on map with LVCC distance
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U7 — SPORTING EVENT BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  watching the Champions League final in Munich
+
+[SYS]  Detect sports_event = "UEFA_Champions_League_Final"
+[SYS]  Identify: high demand, stadium proximity filter, fan packages
+
+BOT ◀  ⚽ Champions League Final in Munich — EPIC!
+
+       Searching hotels near Allianz Arena...
+
+       🏟️ MATCH DAY PACKAGES — MUNICH:
+
+       1. Hilton Munich City ⭐⭐⭐⭐
+          📍 2.1 km from Allianz Arena
+          💰 €520/night (match night premium)
+          ⚽ Match day shuttle to/from stadium
+          🍺 Pre-match beer & bratwurst package
+          📺 Post-match celebration with live screen
+          ✅ 8 rooms remaining
+
+       2. Novotel Munich City ⭐⭐⭐⭐
+          📍 3.4 km from Allianz Arena
+          💰 €380/night
+          🎽 Fan zone dinner with match viewing
+          ⚽ Stadium shuttle service
+          ✅ 15 rooms available
+
+       3. Premier Hotel Munich ⭐⭐⭐
+          📍 5 km (U-Bahn to stadium: 12 mins)
+          💰 €220/night
+          🚇 U3 subway stop 5 min walk
+          ✅ Best value option
+
+       ℹ️ TIP: Book hotel checkout for NEXT DAY after match —
+       traffic post-final can be very heavy.
+
+[BTN]  Book Hotel 1
+[BTN]  Book Hotel 2
+[BTN]  Book Hotel 3 (budget)
+[BTN]  🎟️ Can you help with match tickets too?
+[BTN]  🚇 Show hotels with best transport links
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP U8 — MONSOON / OFF-PEAK DEALS
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  cheapest time to visit Goa?
+
+[SYS]  city = "Goa", user_query_type = "best_time_value"
+[SYS]  Load seasonal pricing data for Goa properties
+
+BOT ◀  🌴 Smart question! Here's Goa's price calendar:
+
+       📅 GOAN PRICING SEASONS:
+
+       🔴 PEAK (Nov–Feb): $120–$400/night
+       Average: 22°C | Busy beaches | Festival season
+
+       🟡 SHOULDER (Oct, Mar): $80–$200/night
+       Average: 28°C | Less crowded | Good weather
+
+       🟢 OFF-PEAK/MONSOON (Jun–Sep): $30–$80/night
+       🌧️ Heavy rain | Lush green scenery
+       Perfect for: Yoga retreats, Waterfalls, Budget travelers
+
+       💚 BEST VALUE PICKS RIGHT NOW (Monsoon):
+
+       1. Taj Exotica Goa ⭐⭐⭐⭐⭐
+          Peak: $350/night → NOW: $95/night (73% off!)
+          🌿 Monsoon spa packages | Private villa vibes
+          🌧️ "Monsoon Romance" package available
+
+       2. Alila Diwa Goa ⭐⭐⭐⭐⭐
+          Peak: $280/night → NOW: $78/night (72% off!)
+          🧘 7-day yoga & wellness retreat package
+          🌊 Infinity pool with monsoon rain backdrop
+
+       When are you thinking of visiting?
+
+[BTN]  Monsoon — I love rain!
+[BTN]  Shoulder season (Oct)
+[BTN]  Peak season — I want sunshine
+[BTN]  🔔 Alert me when peak prices drop
+
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART V  —  CORPORATE & BUSINESS TRAVEL MODULE
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V1 — CORPORATE ACCOUNT SETUP
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I want to set up a corporate account for my company
+
+[SYS]  Detect intent = "CORPORATE_ACCOUNT_SETUP"
+[SYS]  Load corporate onboarding flow
+
+BOT ◀  🏢 Welcome to BookBot Business!
+
+       Setting up a corporate account gives your company:
+       ✅ Negotiated corporate rates (up to 30% off)
+       ✅ Centralized invoicing & billing
+       ✅ Travel policy enforcement
+       ✅ Multi-traveler management dashboard
+       ✅ Monthly consolidated invoice
+       ✅ Dedicated business support line
+       ✅ Carbon offset reporting
+       ✅ Expense report integration (SAP/Concur/QuickBooks)
+
+       Let's set up your account!
+       What is your company name?
+
+YOU ▶  TechCorp Solutions Pvt Ltd
+
+BOT ◀  Great! And your company email domain?
+       (e.g. techcorp.com — we'll verify all employees)
+
+YOU ▶  techcorp.com
+
+[SYS]  Store company_name = "TechCorp Solutions Pvt Ltd"
+[SYS]  Store email_domain = "techcorp.com"
+[SYS]  Initiate domain verification email
+
+BOT ◀  Perfect. How many employees will travel monthly?
+
+[BTN]  1–5 travelers
+[BTN]  6–20 travelers
+[BTN]  21–100 travelers
+[BTN]  100+ travelers (Enterprise)
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V2 — CORPORATE BOOKING WITH POLICY ENFORCEMENT
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Corporate user already logged in with company account
+
+YOU ▶  book me a hotel in Singapore, traveling next Monday
+
+[SYS]  Load corporate profile for user PSID
+[SYS]  Retrieve travel_policy: max_nightly_rate = $250, hotel_stars = max 4
+[SYS]  city = "Singapore", checkin = next Monday
+
+BOT ◀  🏢 TechCorp Business Booking
+
+       Searching Singapore hotels within your company policy:
+       📋 Policy: Max $250/night | Max 4-star | Business district preferred
+
+       ✅ POLICY-COMPLIANT OPTIONS:
+
+       1. Novotel Singapore Clarke Quay ⭐⭐⭐⭐
+          💰 $198/night ✅ Within policy
+          📍 CBD area | MRT: Clarke Quay (3 min walk)
+          🌐 Gigabit WiFi | Business lounge access
+          💼 Meeting rooms available (book via bot)
+          🧾 Auto-invoice to TechCorp account
+
+       2. Park Hotel Farrer Park ⭐⭐⭐⭐
+          💰 $175/night ✅ Within policy
+          📍 Little India | MRT: Farrer Park
+          ☕ Business breakfast included
+          🧾 Auto-invoice to TechCorp account
+
+       ⛔ OUTSIDE POLICY (shown for reference):
+       Marina Bay Sands: $520/night — EXCEEDS policy limit
+       (Requires manager approval to book)
+
+[BTN]  Book Novotel ($198)
+[BTN]  Book Park Hotel ($175)
+[BTN]  🔓 Request policy exception
+[BTN]  📅 I need multiple nights
+[BTN]  🏢 Need meeting room too?
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V3 — EXPENSE REPORT INTEGRATION
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I need the invoice for my Singapore trip for expense report
+
+[SYS]  Retrieve bookings for user with corporate tag
+[SYS]  booking_ref = "BB-2026-SGP-7734"
+
+BOT ◀  📋 EXPENSE DOCUMENTATION — BB-2026-SGP-7734
+
+       I can send you this booking's invoice in multiple formats:
+
+       🧾 AVAILABLE FORMATS:
+       1. PDF Invoice (company letterhead)
+       2. CSV for SAP Concur upload
+       3. XML for QuickBooks import
+       4. JSON for custom ERP systems
+       5. Email directly to your finance team
+
+       The invoice includes:
+       ✅ Hotel name, address, VAT number
+       ✅ Check-in / checkout dates
+       ✅ Room rate breakdown per night
+       ✅ Taxes and service charges itemized
+       ✅ Company name and traveler name
+       ✅ Your employee ID / cost center
+       ✅ GST/VAT split where applicable
+
+[BTN]  📄 PDF Invoice
+[BTN]  📊 SAP Concur CSV
+[BTN]  📧 Email to finance team
+[BTN]  📥 All formats (zip download)
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V4 — MULTI-CITY BUSINESS TRIP BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I have a 2-week business trip: Bangalore Mon-Wed, Mumbai Thu-Fri, Delhi next week Mon-Fri
+
+[SYS]  Detect multi_city = true
+[SYS]  Parse: city[1] = Bangalore, nights = 2; city[2] = Mumbai, nights = 2; city[3] = Delhi, nights = 5
+[SYS]  Load corporate rates for all 3 cities simultaneously
+
+BOT ◀  ✈️ Multi-City Business Trip Planner!
+
+       I'll find the best hotels for your entire itinerary at once.
+
+       SEARCHING ALL 3 CITIES... 🔍
+
+       📍 LEG 1: BANGALORE (Mon–Wed, 2 nights)
+       → Marriott Whitefield: ₹8,200/night ✅ Policy compliant
+       → Near Ecospace tech park
+
+       📍 LEG 2: MUMBAI (Thu–Fri, 2 nights)
+       → ITC Grand Central: ₹9,800/night ✅ Policy compliant
+       → Near Lower Parel business district
+
+       📍 LEG 3: DELHI (Next Mon–Fri, 5 nights)
+       → The Lalit New Delhi: ₹11,200/night ✅ Policy compliant
+       → Near Connaught Place | Airport Express: 20 min
+
+       💰 TOTAL TRIP COST: ₹1,07,800
+       🧾 Consolidated invoice available at end of trip
+       ✅ All within TechCorp travel policy
+
+       Book all 3 legs together?
+
+[BTN]  ✅ Book all 3 legs now
+[BTN]  📝 Review each separately first
+[BTN]  🔄 Change any hotel
+[BTN]  📋 Send itinerary to manager for approval
+[BTN]  ✈️ Need flight booking help too?
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V5 — CORPORATE REPORTING DASHBOARD
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  show me our company's travel spending this month
+
+[SYS]  Authenticate: corporate_admin role required
+[SYS]  Retrieve all bookings for TechCorp, current month
+
+BOT ◀  📊 TECHCORP — TRAVEL REPORT
+       Month: March 2026
+
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       TOTAL SPEND THIS MONTH: ₹8,42,500
+
+       BY CITY:
+       🏙️ Bangalore:  ₹2,18,000  (26%)
+       🏙️ Mumbai:    ₹1,95,600  (23%)
+       🏙️ Delhi:     ₹3,28,900  (39%)
+       🏙️ Hyderabad: ₹99,000   (12%)
+
+       BY TRAVELER (Top 5):
+       1. Rahul Sharma    — ₹1,45,200
+       2. Priya Nair      — ₹1,12,800
+       3. Arjun Mehta     — ₹98,400
+       4. Divya Krishnan  — ₹87,600
+       5. Vikram Patel    — ₹76,500
+
+       POLICY VIOLATIONS: 2 flagged
+       ⚠️ Rahul Sharma — Marina Bay Sands exceeded limit
+       ⚠️ Priya Nair — Late cancellation fee charged
+
+       CO₂ FOOTPRINT: 2.4 tonnes (hotel stays only)
+       🌱 Offset available: ₹2,400
+
+[BTN]  📄 Download Full PDF Report
+[BTN]  📧 Email report to CFO
+[BTN]  🔍 Investigate policy violations
+[BTN]  🌱 Purchase carbon offsets
+[BTN]  📅 View last month
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP V6 — TEAM TRAVEL — BOOKING FOR COLLEAGUES
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I need to book 5 rooms in Hyderabad for my team next week
+
+[SYS]  Detect group_corporate_booking = true, rooms = 5, city = "Hyderabad"
+[SYS]  Check team manager permission level
+
+BOT ◀  👥 Team Booking — 5 Rooms in Hyderabad
+
+       Do you need:
+       A) 5 individual rooms (all guests separate)
+       B) Mix of rooms (some sharing)
+       C) Corporate apartment / serviced apartments
+
+[BTN]  A — 5 individual rooms
+[BTN]  B — Tell me the mix
+[BTN]  C — Show serviced apartments
+
+YOU ▶  A — 5 individual rooms
+
+BOT ◀  Great! Will all 5 guests check in and out on the same dates?
+
+[BTN]  Yes — same dates
+[BTN]  No — different arrival/departure times
+
+YOU ▶  Yes same dates, Monday to Friday
+
+BOT ◀  Would you like me to send booking confirmation
+       directly to each team member's email?
+
+[BTN]  ✅ Yes — email each person
+[BTN]  📋 Send all to me only
+[BTN]  ➕ Enter names & emails now
+
+YOU ▶  ➕ Enter names & emails now
+
+BOT ◀  Please share in this format:
+       Name | Email
+       (one per line, up to 20 guests)
+
+YOU ▶  Rahul Sharma | rahul@techcorp.com
+       Priya Nair | priya@techcorp.com
+       Arjun Mehta | arjun@techcorp.com
+       Divya Krishna | divya@techcorp.com
+       Vikram Patel | vikram@techcorp.com
+
+[SYS]  Parse 5 guest entries
+[SYS]  Validate email formats — all valid
+[SYS]  Search group rates in Hyderabad
+
+BOT ◀  🔍 Searching group rates for 5 rooms in Hyderabad...
+
+       🏨 TOP PICKS WITH GROUP DISCOUNT:
+
+       1. Novotel Hyderabad Convention Centre ⭐⭐⭐⭐⭐
+          💰 ₹6,800/room/night × 5 rooms × 4 nights = ₹1,36,000
+          📍 Near HICC | Hi-Tech City shuttle
+          🏊 Pool | Gym | Multiple restaurants
+          👥 Group discount: 18% applied
+
+       2. Courtyard Marriott Hyderabad ⭐⭐⭐⭐
+          💰 ₹5,400/room/night × 5 rooms × 4 nights = ₹1,08,000
+          📍 Banjara Hills | Central location
+          👥 Group discount: 15% applied
+
+       Book for the team?
+
+[BTN]  Book Novotel (₹1,36,000 total)
+[BTN]  Book Courtyard (₹1,08,000 total)
+[BTN]  Request custom group quote
+[BTN]  🔄 Adjust dates or rooms
+
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART W  —  ACCESSIBILITY & SPECIAL NEEDS MODULE
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP W1 — WHEELCHAIR ACCESSIBLE ROOM REQUEST
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I use a wheelchair and need a fully accessible room in Barcelona
+
+[SYS]  Detect accessibility_needs = ["wheelchair_accessible"]
+[SYS]  Filter: ada_rooms = true, roll_in_shower = true, wide_doorways = true
+
+BOT ◀  ♿ Wheelchair Accessible Hotels — Barcelona
+
+       I've filtered for fully accessible properties with:
+       ✅ Roll-in shower (no lip/step)
+       ✅ Wide doorways (≥32 inches / 81cm)
+       ✅ Lowered bed height available on request
+       ✅ Accessible bathroom with grab rails
+       ✅ Elevator access to all floors
+       ✅ Accessible swimming pool (lift available)
+       ✅ Level or ramped entry (no steps)
+       ✅ Accessible parking spaces nearby
+
+       🏨 TOP ACCESSIBLE HOTELS — BARCELONA:
+
+       1. Hotel Arts Barcelona ⭐⭐⭐⭐⭐
+          ♿ Full ADA/European standard compliance
+          💰 €380/night | Accessible sea-view rooms
+          🚿 Roll-in shower confirmed
+          🏊 Pool with hydraulic lift
+          🅿️ Accessible parking: 2 spaces reserved
+          ✅ Accessible rooms: 4 types available
+
+       2. Eurostars Grand Marina ⭐⭐⭐⭐⭐
+          ♿ EU accessible rooms (4 available)
+          💰 €290/night | Port views
+          🚿 Roll-in shower + foldable shower chair
+          📞 In-room emergency call button
+
+       3. NH Collection Barcelona Gran Hotel Calderón ⭐⭐⭐⭐
+          ♿ Standard accessible rooms (8 available)
+          💰 €195/night | Las Ramblas adjacent
+          🚿 Walk-in shower + grab rails
+          ♿ Portable ramp at hotel entrance
+
+       Would you like to specify any additional needs?
+
+[BTN]  Need visual impairment assistance
+[BTN]  Need hearing impairment features
+[BTN]  Need lowered counters / switches
+[BTN]  Need medical bed / hospital equipment
+[BTN]  Book Hotel 1 (Arts Barcelona)
+[BTN]  Book Hotel 2 (Grand Marina)
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP W2 — VISUAL IMPAIRMENT ASSISTANCE
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I am visually impaired and travel with a guide dog
+
+[SYS]  Detect accessibility_needs = ["visual_impairment", "guide_dog"]
+[SYS]  Filter: pet_policy includes service animals, braille_menu = true
+
+BOT ◀  🦮 Guide Dog & Visual Impairment — Fully Supported
+
+       I've filtered for hotels with:
+       ✅ Service animals / guide dogs welcome (all areas)
+       ✅ Braille signage in corridors and rooms
+       ✅ Audio elevator announcements
+       ✅ Large-print menus available
+       ✅ Trained accessibility concierge
+       ✅ Orientation & mobility assistance on arrival
+       ✅ Dog relief area on premises
+
+       Please note: All service/guide dogs are welcome
+       at these properties free of charge — no pet deposit.
+
+       Which city are you visiting?
+
+YOU ▶  London
+
+BOT ◀  🦮 GUIDE DOG FRIENDLY — LONDON:
+
+       1. The Savoy ⭐⭐⭐⭐⭐
+          🦮 Guide dogs: Yes (all areas)
+          💰 £520/night
+          🔤 Braille room cards | Audio TV guide
+          👁️ Dedicated accessibility concierge
+          🐾 Dog welcome kit (bowl, treats, mat)
+
+       2. Millennium Hotel London Mayfair ⭐⭐⭐⭐⭐
+          🦮 Guide dogs: Yes (certified service animals)
+          💰 £310/night
+          🔤 Braille menus | Large print available
+          🐾 Dog relief garden: Hyde Park (3 min walk)
+
+       3. Holiday Inn London Kensington ⭐⭐⭐⭐
+          🦮 Guide dogs: Yes
+          💰 £175/night
+          🐾 Kensington Gardens (dog park): 8 min walk
+          🔤 Accessible features on request
+
+[BTN]  Book The Savoy
+[BTN]  Book Millennium Mayfair
+[BTN]  Book Holiday Inn (budget)
+[BTN]  ♿ I also need other accessibility features
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP W3 — HEARING IMPAIRMENT FEATURES
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I am deaf, do hotels have visual alarms and text alerts?
+
+[SYS]  Detect accessibility_needs = ["hearing_impairment", "deaf"]
+[SYS]  Filter: visual_fire_alarm = true, vibrating_alarm_clock = true
+
+BOT ◀  🔔 Deaf-Friendly Hotels — Here's What I Look For:
+
+       ✅ Visual fire alarm / strobe light system
+       ✅ Vibrating alarm clock available on request
+       ✅ Closed captioning on all TVs
+       ✅ Video relay service (VRS) for calls
+       ✅ Text/SMS communication option with front desk
+       ✅ Visual doorbell / knock alert
+       ✅ Text-based check-in option (skip phone calls)
+
+       At BookBot, I will also:
+       📱 Communicate all confirmations via text/chat only
+       📋 Provide written itinerary (no calls required)
+       📲 Send SMS/WhatsApp for all important updates
+
+       Which city and dates?
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP W4 — MEDICAL & HEALTH NEEDS
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I'm diabetic, need a fridge for insulin storage in my room
+
+[SYS]  Detect medical_need = "insulin_refrigeration"
+[SYS]  Filter: rooms with dedicated mini-fridge (not shared), medical_fridge available
+
+BOT ◀  💊 Medical Needs — Diabetes / Insulin Storage
+
+       Important note: I always recommend calling the hotel
+       directly to confirm medical equipment availability.
+
+       However, I've pre-filtered properties that offer:
+       ✅ In-room mini-fridge (dedicated, lockable)
+       ✅ Medical fridge available on request (0–4°C)
+       ✅ Nearby pharmacy (within 500m)
+       ✅ 24/7 nurse on call or medical concierge
+       ✅ Diabetic-friendly meal options (restaurant)
+       ✅ Sharps disposal bin available
+
+       I also flag: nearest hospital from each hotel.
+
+       Which city are you visiting?
+
+YOU ▶  Mumbai
+
+BOT ◀  💊 INSULIN-FRIENDLY HOTELS — MUMBAI:
+
+       1. JW Marriott Mumbai Juhu ⭐⭐⭐⭐⭐
+          ✅ Medical fridge on request (confirmed)
+          ✅ Dietitian-approved menu available
+          🏥 Nearby: Lilavati Hospital (1.2 km)
+          💊 Pharmacy: Apollo 24/7 (0.3 km)
+          💰 ₹14,500/night
+
+       2. Trident Bandra Kurla ⭐⭐⭐⭐⭐
+          ✅ In-room fridge (all rooms)
+          ✅ Diabetic meal plan available (request on check-in)
+          🏥 Nearby: Hinduja Hospital (2.1 km)
+          💰 ₹11,200/night
+
+[BTN]  Book JW Marriott
+[BTN]  Book Trident
+[BTN]  ❓ I have other medical needs
+[BTN]  📞 Connect me to hotel directly
+
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART X  —  CRISIS & EMERGENCY HANDLING MODULE
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP X1 — NATURAL DISASTER / EMERGENCY EVACUATION BOOKING
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  there's a flood alert in my city. I need emergency accommodation tonight
+
+[SYS]  Detect emergency_type = "natural_disaster_flood"
+[SYS]  current_time = tonight, urgency = CRITICAL
+[SYS]  Load emergency booking flow — skip non-essential steps
+
+BOT ◀  🚨 EMERGENCY BOOKING — I'M PRIORITIZING THIS NOW
+
+       I'm searching for available rooms tonight with:
+       ✅ Immediate check-in
+       ✅ Ground-floor or elevated rooms (away from flood risk)
+       ✅ Pet-friendly (if you have animals)
+
+       AVAILABLE TONIGHT:
+
+       Nearby options with confirmed availability:
+       1. City Inn Central — 2 rooms left | Check-in: now
+       2. Budget Express Hotel — 8 rooms | 24/7 reception
+       3. Holiday Suites — 5 rooms | Pets welcome
+
+       ⚡ FAST-TRACK: Which shall I book right now?
+       I can complete booking in under 2 minutes.
+
+       Also:
+       📞 Emergency services: 112
+       🌊 Flood helpline: 1800-XXX-XXXX
+
+[BTN]  ⚡ Book City Inn NOW
+[BTN]  ⚡ Book Budget Express NOW
+[BTN]  🐾 I have pets — Book Holiday Suites
+[BTN]  📞 Connect to live agent
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP X2 — STRANDED TRAVELER (FLIGHT CANCELLATION)
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  my flight was cancelled. I'm stuck at Heathrow. Need a hotel nearby NOW
+
+[SYS]  Detect stranded_traveler = true, location = "Heathrow Airport"
+[SYS]  Urgency: HIGH, filter within 5km of LHR
+
+BOT ◀  ✈️ Flight Cancelled — Heathrow Hotels Available NOW
+
+       I'm sorry about your flight! Let me find you
+       something fast — what matters most right now?
+
+[BTN]  🚌 Free shuttle to hotel
+[BTN]  💰 Cheapest available
+[BTN]  🛏️ Just need to sleep (any option)
+[BTN]  🛁 Need proper comfort
+
+YOU ▶  Free shuttle to hotel
+
+BOT ◀  🚌 HEATHROW AIRPORT HOTELS — FREE SHUTTLE:
+
+       1. Radisson Blu Heathrow ⭐⭐⭐⭐
+          📍 10 min shuttle | 24/7 shuttle bus
+          💰 £145/night (tonight's rate)
+          ✅ Rooms available now
+          ☕ Includes breakfast
+
+       2. Sofitel London Heathrow ⭐⭐⭐⭐⭐
+          📍 T5 — connected via walkway (no shuttle needed!)
+          💰 £220/night
+          ✅ Rooms available now
+
+       3. Holiday Inn Heathrow Ariel ⭐⭐⭐⭐
+          📍 7 min shuttle | Shuttle every 30 min
+          💰 £105/night
+          ✅ Multiple rooms available
+
+       💡 TIP: Keep your airline's cancellation documentation —
+       many airlines reimburse hotel costs up to £200/night.
+       I can prepare an itemized receipt for your airline claim.
+
+[BTN]  Book Radisson (shuttle now)
+[BTN]  Book Sofitel (walk from T5)
+[BTN]  Book Holiday Inn (budget)
+[BTN]  📄 I need airline claim receipt
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP X3 — OVERBOOKING RECOVERY
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Hotel has overbooked and is unable to accommodate guest.
+       This is a hotel-side alert triggering bot recovery flow.
+
+[SYS]  Alert from hotel: booking_ref BB-2026-MUM-4421 = OVERBOOKING
+[SYS]  Guest at hotel reception, needs alternate placement immediately
+[SYS]  Trigger recovery flow: find comparable hotel within 2km, same or better star rating
+
+BOT ◀  😔 Oh no — We're deeply sorry about this situation.
+
+       Your hotel has reported an overbooking. This should not happen,
+       and we take full responsibility.
+
+       Here is what we're doing for you RIGHT NOW:
+       ✅ Finding a comparable or BETTER hotel nearby
+       ✅ The full cost difference (if higher) is on us
+       ✅ Your taxi to the new hotel is fully covered
+       ✅ We're adding 5,000 loyalty points for the inconvenience
+
+       ALTERNATIVE HOTELS FOUND (within 1.5 km, same dates):
+
+       1. Taj Mahal Palace — ⭐⭐⭐⭐⭐
+          Original hotel was 4-star — This is an UPGRADE!
+          Cost difference: +$80/night → FULLY COVERED BY US
+          🚕 Taxi from your location: 8 min (paid by BookBot)
+
+       2. The Oberoi — ⭐⭐⭐⭐⭐
+          Also an upgrade!
+          🚕 Taxi: 12 min (paid by BookBot)
+
+[BTN]  ✅ Move to Taj Mahal Palace (upgrade!)
+[BTN]  ✅ Move to Oberoi (upgrade!)
+[BTN]  📞 Speak to agent right now
+[BTN]  💰 I want full refund instead
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP X4 — MEDICAL EMERGENCY DURING STAY
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I need a hospital near my hotel urgently
+
+[SYS]  Detect intent = "MEDICAL_EMERGENCY"
+[SYS]  Look up user's active booking → hotel location
+[SYS]  geocode hotel → find nearest hospitals with ER
+
+BOT ◀  🚨 MEDICAL EMERGENCY — IMMEDIATE HELP
+
+       I see you're staying at: The Leela Palace, New Delhi
+
+       🏥 NEAREST HOSPITALS WITH EMERGENCY:
+
+       1. Max Super Speciality Hospital
+          📍 Saket — 1.8 km from your hotel
+          📞 +91-11-2651-5050
+          🚑 Emergency available 24/7
+
+       2. Fortis Escorts Heart Institute
+          📍 Okhla — 2.4 km
+          📞 +91-11-4713-5000
+          🚑 Cardiac & general emergency
+
+       3. AIIMS Trauma Centre
+          📍 Ansari Nagar — 3.1 km
+          📞 +91-11-2658-8500
+          🚑 Major trauma center
+
+       IMMEDIATE STEPS:
+       📞 Call 112 (India emergency) for ambulance
+       🏨 Ask hotel reception to call ambulance NOW
+       👨‍⚕️ Hotel doctor on call: +91-XXXX (call front desk)
+
+       I've also alerted the hotel about your emergency.
+
+[BTN]  📞 112 Emergency
+[BTN]  🏨 Alert hotel reception
+[BTN]  📞 Call nearest hospital directly
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP X5 — LOST PASSPORT / DOCUMENTS
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I lost my passport. I can't check in without ID. What do I do?
+
+[SYS]  Detect crisis_type = "lost_documents"
+[SYS]  Load embassy contacts for user's nationality (if known)
+
+BOT ◀  😟 Lost Passport — Here's Your Step-by-Step Guide
+
+       I know this is stressful. Let me help you through this.
+
+       STEP 1 — REPORT TO LOCAL POLICE (Required by embassy)
+       📍 Go to nearest police station
+       Ask for a "lost passport report" / FIR
+       Keep the report number — you'll need it
+
+       STEP 2 — CONTACT YOUR EMBASSY
+       (I can look up the number for your nationality)
+       What is your nationality?
+
+YOU ▶  Indian
+
+BOT ◀  🇮🇳 INDIAN EMBASSY CONTACTS:
+
+       If you are in the UK:
+       High Commission of India, London
+       📞 +44-20-7836-8484
+       🌐 hcilondon.in | Emergency: 24/7
+
+       If you are in the US:
+       Embassy of India, Washington DC
+       📞 +1-202-939-7000
+       Emergency passport certificate issued in 2–3 days
+
+       STEP 3 — CHECK IN WITH HOTEL
+       Many hotels can accept alternate ID temporarily:
+       ✅ Driving license (domestic)
+       ✅ Birth certificate + photo ID combo
+       ✅ Emergency travel document from embassy
+
+       STEP 4 — I CAN HELP
+       📧 I can send hotel your booking confirmation with photo
+       📞 I can contact the hotel on your behalf to explain
+       📋 I can prepare a guest verification letter
+
+[BTN]  📞 Contact hotel on my behalf
+[BTN]  📋 Send me embassy contact for another country
+[BTN]  ✉️ Hotel verification letter
+
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART Y  —  AI UPSELL & CROSS-SELL ENGINE
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Y1 — INTELLIGENT ROOM UPGRADE OFFER
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Triggered 48 hours before check-in.
+       AI analyzes availability, guest history, and margin opportunity.
+
+[SYS]  Booking BB-2026-BOM-9912: Standard Room → check-in in 48h
+[SYS]  AI check: Suite available at this property, 40% vacant, upgrade margin = positive
+[SYS]  Guest history: stayed twice before, always rated pool/sea-view highly
+[SYS]  Send personalized upgrade offer
+
+BOT ◀  🌟 Exclusive Upgrade Offer — Just for You!
+
+       Hi! Your stay at The Oberoi Mumbai begins in 48 hours.
+
+       Based on your preference for sea views and pool access,
+       I have a special offer just for you:
+
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       YOUR CURRENT BOOKING:
+       Standard Deluxe Room | City view
+       ₹12,000/night
+
+       UPGRADE AVAILABLE:
+       Premier Sea View Suite
+       🌊 Direct Arabian Sea panorama
+       🛁 Private plunge pool on balcony
+       🍾 Complimentary champagne on arrival
+       🛎️ Butler service included
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       Upgrade cost: Just ₹3,200/night extra
+       (Regular rate: ₹8,500 extra — you save ₹5,300!)
+
+       This offer expires in 12 hours.
+
+[BTN]  ✅ Upgrade for ₹3,200/night
+[BTN]  🖼️ Show me suite photos
+[BTN]  ❌ No thanks, keep my room
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Y2 — DINING PACKAGE UPSELL
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  I booked a room-only rate in Rome
+
+BOT ◀  🍝 Great choice! Since you're in Rome, would you like to add:
+
+       🍽️ HALF-BOARD PACKAGE (saves vs à la carte):
+       Breakfast + Dinner daily
+       → +€45/person/night (saves ~€60 vs paying separately)
+
+       What's included:
+       ✅ Full Italian breakfast (7–10 AM)
+       ✅ 4-course dinner at hotel restaurant
+       ✅ Chef's wine pairing option (+€18)
+       ✅ Kids eat free (under 10)
+
+       OR — BREAKFAST ONLY:
+       → +€22/person/night
+       ✅ Best rated breakfast in Rome (TripAdvisor)
+       ✅ Fresh pasta station | Cappuccino bar
+
+[BTN]  🍷 Add Half-Board (€45/person)
+[BTN]  ☕ Add Breakfast Only (€22/person)
+[BTN]  🚫 Stay room-only
+[BTN]  🍽️ Show restaurant menu first
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Y3 — SPA & WELLNESS CROSS-SELL
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Triggered when user books 3+ nights.
+
+YOU ▶  booking confirmed for 4 nights in Bali
+
+BOT ◀  🌿 Your 4-night Bali retreat is confirmed!
+
+       Since you're staying 4 nights, would you like to enhance
+       your wellness experience?
+
+       🧘 BALI WELLNESS PACKAGES:
+
+       1. Daily Balinese Massage (60 min/day)
+          → +$35/day ($140 for your 4-night stay)
+          🌺 Traditional Balinese technique
+          💆 In-room or spa setting
+
+       2. Couples Yoga + Massage Package
+          → +$80/day ($320 total)
+          🧘‍♀️ Sunrise yoga on rice terraces
+          💆‍♂️ 90-min couples massage
+          🥤 Healthy detox smoothies included
+
+       3. Full Wellness Retreat Package
+          → +$120/day ($480 total)
+          Includes: yoga, meditation, massage, healthy meals,
+          sunset river cruise + sound healing session
+
+       Limited spots — Bali is popular for wellness!
+
+[BTN]  💆 Add Daily Massage
+[BTN]  👫 Add Couples Package
+[BTN]  🌿 Add Full Retreat
+[BTN]  🙅 No thanks, I'm good
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Y4 — AIRPORT TRANSFER UPSELL
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Triggered at booking confirmation step, flight arrival likely.
+
+BOT ◀  ✈️ One more thing before we finalize!
+
+       Don't forget you'll need to get from the airport to the hotel.
+
+       🚗 PRIVATE AIRPORT TRANSFER — ADD NOW:
+
+       Option A: Economy Car (up to 4 passengers)
+       → ₹1,200 one-way | ₹2,200 return
+       🚗 Toyota Innova | A/C | Driver with name board
+
+       Option B: Premium Car (up to 4 passengers)
+       → ₹2,500 one-way | ₹4,500 return
+       🚘 Mercedes E-Class | Meet & Greet in arrivals hall
+
+       Option C: Minibus (5–8 passengers)
+       → ₹3,200 one-way | ₹5,800 return
+       🚌 Innova Crysta | For groups or large luggage
+
+       ℹ️ All drivers track your flight live —
+       they wait even if your flight is delayed.
+
+[BTN]  🚗 Add Economy Transfer
+[BTN]  🚘 Add Premium Transfer
+[BTN]  🚌 Need minibus
+[BTN]  ✈️ Different airport than default
+[BTN]  🙅 I'll arrange my own transport
+
+
+══════════════════════════════════════════════════════════════════════════════════════
+  PART Z  —  COMPLETE MULTILINGUAL CONVERSATION EXAMPLES
+══════════════════════════════════════════════════════════════════════════════════════
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Z1 — FULL BOOKING FLOW IN ARABIC (العربية)
+────────────────────────────────────────────────────────────────────────────────────
+
+[NOTE] Complete hotel booking conversation conducted entirely in Arabic.
+
+YOU ▶  مرحباً، أريد حجز فندق في دبي
+
+[SYS]  langdetect = "ar", set lang = "ar"
+
+BOT ◀  مرحباً بك في BookBot! 🏨
+       أنا مساعدك الشخصي لحجز الفنادق.
+
+       يسعدني مساعدتك في حجز فندق في دبي.
+       ما هو تاريخ وصولك؟
+
+YOU ▶  الخامس عشر من أبريل
+
+BOT ◀  ممتاز! وما هو تاريخ المغادرة؟
+
+YOU ▶  العشرين من أبريل — خمس ليالي
+
+BOT ◀  رائع! ٥ ليالٍ في دبي.
+       كم عدد الضيوف؟
+
+[BTN]  شخص واحد
+[BTN]  شخصان
+[BTN]  عائلة
+[BTN]  مجموعة
+
+YOU ▶  شخصان — أنا وزوجتي
+
+BOT ◀  هل لديك تفضيل معين؟
+
+[BTN]  قريب من برج خليفة
+[BTN]  على شاطئ الجميرا
+[BTN]  في مدينة دبي للتسوق
+[BTN]  منطقة الأعمال
+[BTN]  الأرخص ضمن ميزانيتي
+
+YOU ▶  قريب من برج خليفة
+
+BOT ◀  🏙️ الفنادق القريبة من برج خليفة — ٥ ليالٍ (١٥–٢٠ أبريل)
+       للزوجين:
+
+       1. أرماني هوتيل دبي ⭐⭐⭐⭐⭐
+          📍 داخل برج خليفة مباشرة
+          💰 ٢٬٨٠٠ درهم/ليلة
+          🌟 إطلالة مباشرة على البرج
+          ✅ ٣ غرف متاحة
+
+       2. فندق آت.موسفير ⭐⭐⭐⭐⭐
+          📍 ٥ دقائق من برج خليفة
+          💰 ١٬٩٠٠ درهم/ليلة
+          🌟 مسبح لا نهائي | مطعم على السطح
+          ✅ متاح
+
+       3. ميلينيوم داون تاون دبي ⭐⭐⭐⭐
+          📍 ١٠ دقائق سيراً
+          💰 ٨٥٠ درهم/ليلة
+          ✅ أفضل قيمة مقابل الموقع
+
+YOU ▶  أريد الأول — أرماني هوتيل
+
+BOT ◀  اختيار ممتاز! 🌟
+       أرماني هوتيل دبي — غرفة لشخصين
+       ١٥–٢٠ أبريل (٥ ليالٍ)
+       الإجمالي: ١٤٬٠٠٠ درهم
+
+       ما هو اسمك الكامل كما يظهر في جواز السفر؟
+
+YOU ▶  أحمد محمد العمري
+
+BOT ◀  شكراً يا سيد أحمد.
+       ما هو بريدك الإلكتروني؟
+
+YOU ▶  ahmed.omari@gmail.com
+
+BOT ◀  ورقم هاتفك؟
+
+YOU ▶  +971 50 123 4567
+
+BOT ◀  هل لديك أي طلبات خاصة؟
+
+[BTN]  طابق عالٍ مع إطلالة على البرج
+[BTN]  وسائد ناعمة فقط
+[BTN]  لا توجد طلبات خاصة
+[BTN]  أكتب طلبي
+
+YOU ▶  طابق عالٍ مع إطلالة على برج خليفة من فضلك
+
+BOT ◀  ✅ تمت الإضافة! سيتم طلب طابق عالٍ مع إطلالة على البرج.
+
+       طريقة الدفع المفضلة؟
+
+[BTN]  بطاقة ائتمان
+[BTN]  باي بال
+[BTN]  Apple Pay
+[BTN]  دفع عند الوصول
+
+YOU ▶  بطاقة ائتمان
+
+BOT ◀  يرجى إدخال رقم بطاقتك الائتمانية:
+
+[NOTE] Secure payment input — PCI DSS compliant
+
+YOU ▶  [Provides card details via secure form]
+
+[SYS]  Process payment — AED 14,000 via Stripe
+[SYS]  Generate booking_ref = BB-2026-DXB-0041
+
+BOT ◀  🎉 تم تأكيد الحجز!
+
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       رقم الحجز: BB-2026-DXB-0041
+       الفندق: أرماني هوتيل دبي
+       تسجيل الدخول: ١٥ أبريل ٢٠٢٦ (بعد الساعة ٣ مساءً)
+       تسجيل الخروج: ٢٠ أبريل ٢٠٢٦
+       الضيوف: أحمد محمد العمري (٢ بالغ)
+       الإجمالي المدفوع: ١٤٬٠٠٠ درهم
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+       سيصلك تأكيد بالبريد الإلكتروني إلى:
+       ahmed.omari@gmail.com
+
+       هل تود إضافة نقل من المطار؟
+
+[BTN]  نعم، أريد نقل من المطار
+[BTN]  لا شكراً
+[BTN]  عرض تفاصيل الحجز
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Z2 — FULL BOOKING FLOW IN HINDI (हिंदी)
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  मुझे मुंबई में होटल चाहिए
+
+[SYS]  langdetect = "hi"
+
+BOT ◀  नमस्ते! BookBot में आपका स्वागत है! 🏨
+       मैं मुंबई में आपके लिए बेहतरीन होटल खोजूंगा।
+
+       चेक-इन की तारीख क्या है?
+
+YOU ▶  20 मार्च
+
+BOT ◀  और चेक-आउट?
+
+YOU ▶  25 मार्च — 5 रातें
+
+BOT ◀  कितने मेहमान होंगे?
+
+[BTN]  1 व्यक्ति
+[BTN]  2 व्यक्ति
+[BTN]  परिवार
+[BTN]  समूह
+
+YOU ▶  2 — मैं और मेरी पत्नी
+
+BOT ◀  आपका बजट प्रति रात क्या है?
+
+[BTN]  ₹3,000 तक
+[BTN]  ₹3,000–₹7,000
+[BTN]  ₹7,000–₹15,000
+[BTN]  ₹15,000+
+
+YOU ▶  ₹7,000–₹15,000
+
+BOT ◀  🏙️ मुंबई के शानदार होटल — 5 रातें:
+
+       1. ताज महल पैलेस ⭐⭐⭐⭐⭐
+          📍 कोलाबा — गेटवे ऑफ इंडिया के सामने
+          💰 ₹12,500/रात
+          🌟 ऐतिहासिक इमारत | हार्बर व्यू
+          ✅ 5 कमरे उपलब्ध
+
+       2. ट्राइडेंट नरीमन पॉइंट ⭐⭐⭐⭐⭐
+          📍 मरीन ड्राइव
+          💰 ₹9,800/रात
+          🌊 अरेबियन सी व्यू | इनफिनिटी पूल
+          ✅ उपलब्ध
+
+       3. JW मैरियट जुहू ⭐⭐⭐⭐⭐
+          📍 जुहू बीच
+          💰 ₹13,500/रात
+          🏖️ प्राइवेट बीच | स्पा
+          ✅ उपलब्ध
+
+YOU ▶  ताज महल पैलेस बुक करो
+
+BOT ◀  शानदार चुनाव! 🌟
+
+       ताज महल पैलेस | 20–25 मार्च | 2 मेहमान
+       कुल: ₹62,500 (5 रातें)
+
+       आपका पूरा नाम (पासपोर्ट अनुसार)?
+
+YOU ▶  राजेश कुमार शर्मा
+
+BOT ◀  ईमेल एड्रेस?
+
+YOU ▶  rajesh.sharma@gmail.com
+
+BOT ◀  मोबाइल नंबर?
+
+YOU ▶  +91 98765 43210
+
+BOT ◀  कोई विशेष अनुरोध?
+
+[BTN]  हनीमून सजावट
+[BTN]  समुद्र का दृश्य
+[BTN]  ऊंची मंजिल
+[BTN]  कोई अनुरोध नहीं
+
+YOU ▶  हनीमून सजावट
+
+BOT ◀  💕 हनीमून पैकेज जोड़ा जा रहा है:
+       🌹 गुलाब की पंखुड़ियां
+       🍾 शैम्पेन की बोतल
+       🍓 चॉकलेट स्ट्रॉबेरी
+
+       भुगतान का तरीका?
+
+[BTN]  UPI
+[BTN]  क्रेडिट/डेबिट कार्ड
+[BTN]  नेट बैंकिंग
+[BTN]  EMI
+
+YOU ▶  UPI
+
+[SYS]  Generate UPI payment link for ₹62,500
+[SYS]  UPI ID: bookbot@razorpay
+
+BOT ◀  📱 UPI से भुगतान करें:
+
+       UPI ID: bookbot@razorpay
+       राशि: ₹62,500
+
+       या QR कोड स्कैन करें: [QR CODE IMAGE]
+       (Google Pay / PhonePe / Paytm / BHIM — सभी स्वीकार्य)
+
+[SYS]  Payment received via UPI
+[SYS]  booking_ref = BB-2026-BOM-8847 confirmed
+
+BOT ◀  🎉 बुकिंग कन्फर्म हो गई!
+
+       बुकिंग नंबर: BB-2026-BOM-8847
+       होटल: ताज महल पैलेस, मुंबई
+       तारीख: 20–25 मार्च 2026
+       कमरा: डीलक्स हार्बर व्यू (हनीमून सजावट सहित)
+       मेहमान: राजेश कुमार शर्मा
+       भुगतान: ₹62,500 ✅
+
+       कन्फर्मेशन ईमेल rajesh.sharma@gmail.com पर भेजा गया।
+
+[BTN]  ✈️ एयरपोर्ट ट्रांसफर जोड़ें
+[BTN]  🍽️ रेस्टोरेंट बुक करें
+[BTN]  💆 स्पा बुक करें
+[BTN]  📋 बुकिंग देखें
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Z3 — FULL BOOKING FLOW IN SPANISH (Español)
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  Hola, quiero reservar un hotel en Barcelona
+
+[SYS]  langdetect = "es"
+
+BOT ◀  ¡Hola! Bienvenido a BookBot. 🏨
+       Te ayudaré a encontrar el hotel perfecto en Barcelona.
+
+       ¿Cuál es la fecha de llegada?
+
+YOU ▶  10 de mayo
+
+BOT ◀  ¡Perfecto! ¿Y la fecha de salida?
+
+YOU ▶  15 de mayo — 5 noches
+
+BOT ◀  ¿Cuántos huéspedes serán?
+
+[BTN]  Solo yo
+[BTN]  Dos personas
+[BTN]  Familia con niños
+[BTN]  Grupo
+
+YOU ▶  Dos personas — una pareja
+
+BOT ◀  ¿Cuál es tu zona preferida en Barcelona?
+
+[BTN]  🏖️ Barceloneta (playa)
+[BTN]  🎨 Barrio Gótico (centro histórico)
+[BTN]  🛍️ L'Eixample (modernista)
+[BTN]  ⚽ Diagonal / Zona Alta
+[BTN]  🎪 Near Sagrada Família
+[BTN]  Sin preferencia
+
+YOU ▶  Barrio Gótico — queremos explorar el centro histórico
+
+BOT ◀  ¡Excelente elección! El Barrio Gótico es precioso.
+
+       🏨 MEJORES OPCIONES — BARRIO GÓTICO:
+
+       1. Hotel Neri Relais & Châteaux ⭐⭐⭐⭐⭐
+          📍 Corazón del Barrio Gótico
+          💰 €380/noche | Suite de piedra medieval
+          🏛️ Edificio del siglo XII renovado
+          🌹 Terraza con vistas a la catedral
+          ✅ 2 habitaciones disponibles
+
+       2. Grand Hotel Central ⭐⭐⭐⭐⭐
+          📍 Via Laietana — 5 min del Gótico
+          💰 €280/noche | Rooftop pool
+          🏊 Piscina infinity con vistas a la ciudad
+          ✅ Disponible
+
+       3. Hotel Colón Barcelona ⭐⭐⭐⭐
+          📍 Frente a la Catedral de Barcelona
+          💰 €195/noche
+          🏛️ Vista directa a la catedral desde la ventana
+          ✅ Buena disponibilidad
+
+YOU ▶  El Hotel Neri me encanta — lo reservo
+
+BOT ◀  ¡Fantástica elección! Hotel Neri es único en el mundo.
+
+       Hotel Neri | 10–15 mayo | 2 huéspedes
+       Total: €1,900 (5 noches)
+
+       ¿Tu nombre completo (como en el pasaporte)?
+
+YOU ▶  Carlos Eduardo Martínez López
+
+BOT ◀  ¿Tu correo electrónico?
+
+YOU ▶  carlos.martinez@gmail.com
+
+BOT ◀  ¿Número de teléfono?
+
+YOU ▶  +34 612 345 678
+
+BOT ◀  ¿Alguna solicitud especial?
+
+[BTN]  🌹 Decoración romántica
+[BTN]  🍾 Champán en la habitación
+[BTN]  🌆 Vista a la catedral
+[BTN]  Sin solicitudes especiales
+
+YOU ▶  Vista a la catedral y champán por favor
+
+BOT ◀  ✅ Anotado:
+       🏛️ Habitación con vista a la catedral
+       🍾 Champán de bienvenida (Freixenet Cava, el local)
+
+       ¿Método de pago?
+
+[BTN]  Tarjeta de crédito
+[BTN]  PayPal
+[BTN]  Apple Pay / Google Pay
+[BTN]  Bizum
+
+YOU ▶  Bizum
+
+[SYS]  Generate Bizum payment link — €1,900
+[SYS]  Payment confirmed
+
+BOT ◀  ¡Reserva confirmada! 🎉
+
+       Localizador: BB-2026-BCN-3312
+       Hotel: Neri Relais & Châteaux
+       Fechas: 10–15 mayo 2026
+       Vista: Catedral de Barcelona ✅
+       Champán: Preparado para tu llegada 🍾
+       Total: €1,900 ✅
+
+       Te hemos enviado la confirmación a:
+       carlos.martinez@gmail.com
+
+       ¿Quieres añadir traslado del aeropuerto?
+
+[BTN]  ✈️ Sí, añadir traslado
+[BTN]  🍽️ Reservar cena romántica
+[BTN]  💆 Reservar spa
+[BTN]  No gracias — perfecto así
+
+────────────────────────────────────────────────────────────────────────────────────
+STEP Z4 — FULL BOOKING FLOW IN FRENCH (Français)
+────────────────────────────────────────────────────────────────────────────────────
+
+YOU ▶  Bonjour, je voudrais réserver un hôtel à Paris
+
+[SYS]  langdetect = "fr"
+
+BOT ◀  Bonjour et bienvenue sur BookBot! 🏨
+       Je suis ravi de vous aider à trouver l'hôtel idéal à Paris.
+
+       Quelle est votre date d'arrivée?
+
+YOU ▶  Le 14 juillet
+
+BOT ◀  La Fête Nationale! Excellent choix! 🇫🇷
+       ⚠️ Attention: Le 14 juillet est très demandé à Paris.
+       Je vous recommande de réserver rapidement.
+
+       Quelle est votre date de départ?
+
+YOU ▶  Le 18 juillet — 4 nuits
+
+BOT ◀  Combien de personnes?
+
+[BTN]  1 personne
+[BTN]  2 personnes
+[BTN]  Famille avec enfants
+[BTN]  Groupe
+
+YOU ▶  2 personnes
+
+BOT ◀  Votre budget par nuit?
+
+[BTN]  Moins de €150
+[BTN]  €150–€300
+[BTN]  €300–€600
+[BTN]  €600+
+
+YOU ▶  €300–€600
+
+BOT ◀  🗼 HÔTELS PARIS — 14–18 JUILLET:
+       ⚠️ Période du 14 juillet: disponibilité limitée!
+
+       1. Le Bristol Paris ⭐⭐⭐⭐⭐
+          📍 Rue du Faubourg Saint-Honoré
+          💰 €580/nuit
+          🗼 Vue sur les toits de Paris
+          🎆 Terrasse avec vue sur feux d'artifice du 14 juillet
+          ✅ 2 chambres restantes!
+
+       2. Hôtel Molitor Paris ⭐⭐⭐⭐⭐
+          📍 Bois de Boulogne
+          💰 €420/nuit
+          🏊 Piscine Art Déco historique
+          🎆 Feux d'artifice du Trocadéro à 15 min
+          ✅ Disponible
+
+       3. Hôtel Lutetia ⭐⭐⭐⭐⭐
+          📍 Saint-Germain-des-Prés
+          💰 €390/nuit | Art Déco rénové
+          🍷 Bar Jazz emblématique
+          ✅ Disponible
+
+YOU ▶  Le Bristol — c'est parfait pour le 14 juillet!
+
+BOT ◀  Magnifique choix! 🎆
+
+       Le Bristol Paris | 14–18 juillet | 2 personnes
+       Total: €2,320 (4 nuits)
+
+       Votre nom complet (tel qu'indiqué sur votre passeport)?
+
+YOU ▶  Jean-Pierre Dubois
+
+BOT ◀  Votre adresse email?
+
+YOU ▶  jp.dubois@orange.fr
+
+BOT ◀  Votre numéro de téléphone?
+
+YOU ▶  +33 6 12 34 56 78
+
+BOT ◀  Avez-vous des demandes spéciales?
+
+[BTN]  🗼 Vue sur les feux d'artifice
+[BTN]  🥂 Champagne à l'arrivée
+[BTN]  🛁 Bain aux pétales de roses
+[BTN]  Aucune demande particulière
+
+YOU ▶  Vue sur les feux d'artifice et champagne!
+
+BOT ◀  ✅ Noté avec plaisir!
+       🎆 Chambre avec vue sur les feux du 14 juillet
+       🥂 Champagne Moët à l'arrivée
+
+       Mode de paiement?
+
+[BTN]  Carte bancaire
+[BTN]  PayPal
+[BTN]  Apple Pay
+[BTN]  Virement bancaire
+
+YOU ▶  Carte bancaire
+
+[SYS]  Secure payment processed — €2,320 confirmed
+
+BOT ◀  🎉 Réservation confirmée!
+
+       Référence: BB-2026-PAR-7751
+       Hôtel: Le Bristol Paris
+       Dates: 14–18 juillet 2026
+       Vue feux d'artifice: ✅ Demandé
+       Champagne: ✅ Préparé
+       Total: €2,320 ✅
+
+       Confirmation envoyée à: jp.dubois@orange.fr
+
+       Souhaitez-vous ajouter un transfert depuis l'aéroport?
+
+[BTN]  ✈️ Ajouter transfert CDG/Orly
+[BTN]  🍽️ Réserver table restaurant
+[BTN]  Non merci — tout est parfait!

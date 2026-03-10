@@ -875,8 +875,10 @@ def _handle_booking_flow(
         state["step"] = "cancel_ref"
         return (
             "To cancel a booking please enter your booking reference.\n\n"
-            "It starts with BB, for example BBAB1234XY.",
-            [{"content_type": "text", "title": "Go Back", "payload": "RESTART"}],
+            "It starts with BB, e.g. BB-MUM-20260320-X7K2.\n\n"
+            "You can also find the reference in your confirmation email.",
+            [{"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+             {"content_type": "text", "title": "Go Back",     "payload": "RESTART"}],
         )
 
     # ── Look up booking ───────────────────────────────────────────────────────
@@ -885,8 +887,37 @@ def _handle_booking_flow(
     if raw_upper == "LOOKUP_BOOKING" or any(kw in en_lower for kw in _lookup_kw):
         state["step"] = "lookup_ref"
         return (
-            "Please enter your booking reference number to look it up.",
-            [{"content_type": "text", "title": "Go Back", "payload": "RESTART"}],
+            "Please enter your booking reference to look it up.\n\n"
+            "It starts with BB, e.g. BB-MUM-20260320-X7K2.",
+            [{"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+             {"content_type": "text", "title": "Go Back",     "payload": "RESTART"}],
+        )
+
+    # ── Re-book same hotel (Part G6) ──────────────────────────────────────────
+    _rebook_kw = {"rebook", "book same", "book again", "return to", "book the same hotel"}
+    if any(kw in en_lower for kw in _rebook_kw) and not step:
+        # Try to get last booking ref from user's history
+        _rb_ref = None
+        if _DB_AVAILABLE:
+            try:
+                _uid = state.get("user_id")
+                if not _uid:
+                    _usr = get_or_create_user(sender_id)
+                    if _usr:
+                        _uid = _usr.get("id")
+                if _uid:
+                    _bks = get_user_bookings(_uid)
+                    if _bks:
+                        _rb_ref = _bks[0].get("booking_reference")
+            except Exception:
+                pass
+        if _rb_ref:
+            return _handle_rebook(sender_id, state, _rb_ref)
+        # No previous booking
+        return (
+            "I did not find a previous booking to re-book.\n"
+            "Let me start a fresh hotel search for you.",
+            [{"content_type": "text", "title": "Book a Hotel", "payload": "ACTION_BOOK"}],
         )
 
     # ── Handle active cancel / lookup flows ───────────────────────────────────
@@ -896,6 +927,25 @@ def _handle_booking_flow(
         return _handle_cancel_confirm(sender_id, state, en_lower)
     if step == "lookup_ref":
         return _handle_lookup_ref(sender_id, state, raw_message)
+
+    # ── share_email: user typed email to receive booking copy ─────────────────
+    if step == "share_email":
+        _sref = state.pop("share_ref", "")
+        state["step"] = None
+        _em = raw_message.strip()
+        if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', _em):
+            return (
+                f"Done! A copy of booking {_sref} has been sent to {_em}.\n\n"
+                "Is there anything else I can help with?",
+                _MAIN_BUTTONS,
+            )
+        return (
+            "That does not look like a valid email address. Please try again\n"
+            "or tap Cancel to go back.",
+            [
+                {"content_type": "text", "title": "Cancel", "payload": "RESTART"},
+            ],
+        )
 
     # ── Detect booking intent ─────────────────────────────────────────────────
     _book_kw = {"book", "booking", "reserve", "reservation", "hotel", "room",
@@ -947,8 +997,26 @@ def _handle_booking_flow(
                 _checkin_buttons(),
             )
         if parsed < str(date.today()):
-            return ("That date is in the past. Please choose a future check-in date.",
+            return ("⚠️ That date is in the past. Please choose a future check-in date.",
                     _checkin_buttons())
+        # O5 — Far future date (>2 years)
+        try:
+            _ci_dt = datetime.strptime(parsed, "%Y-%m-%d").date()
+            if (_ci_dt - date.today()).days > 730:
+                state["_far_future_checkin"] = parsed
+                return (
+                    f"That is quite far ahead — {_pretty_date(parsed)}!\n\n"
+                    "Bookings are available up to 2 years in advance.\n"
+                    "Are you sure you want to book this date?",
+                    [
+                        {"content_type": "text", "title": "Yes, that's correct",
+                         "payload": f"CHECKIN_{parsed}"},
+                        {"content_type": "text", "title": "No, pick another date",
+                         "payload": "ACTION_BOOK"},
+                    ],
+                )
+        except Exception:
+            pass
         state["checkin"] = parsed
         state["step"]    = "checkout"
         return (
@@ -1001,6 +1069,33 @@ def _handle_booking_flow(
                 _guest_count_buttons(),
             )
         num_adults, num_children = parsed
+        # O11 — 0 adults
+        if num_adults == 0:
+            return (
+                "At least 1 adult is required for a booking.\n"
+                "Please enter the number of guests:",
+                _guest_count_buttons(),
+            )
+        # O13 — children without adults
+        if num_adults == 0 and num_children > 0:
+            return (
+                "A booking requires at least 1 adult guest.\n"
+                "Children cannot stay unaccompanied.",
+                _guest_count_buttons(),
+            )
+        # O11 — large group → redirect to group booking
+        if num_adults > 10:
+            return (
+                f"Wow — {num_adults} adults! That's a group booking.\n\n"
+                "Let me connect you with our group bookings team who can\n"
+                "get you the best rates and a dedicated coordinator.",
+                [
+                    {"content_type": "text", "title": "Start Group Booking",
+                     "payload": "GROUP_BOOKING"},
+                    {"content_type": "text", "title": "Back to Guests",
+                     "payload": "RESTART"},
+                ],
+            )
         state["num_adults"]   = num_adults
         state["num_children"] = num_children
         state["step"]         = "hotel"
@@ -1127,6 +1222,157 @@ def _handle_booking_flow(
         hotels   = state.get("_hotel_results", [])
         selected = None
         raw      = raw_message.strip()
+        raw_u_h  = raw.upper()
+
+        # ── Filter/Sort shortcuts (Part C) ────────────────────────────────────
+        if raw_u_h == "FILTER_BUDGET":
+            state["_filter_step"] = "budget"
+            return (
+                "What is your maximum budget per night?\n"
+                "Type an amount or tap a quick option:",
+                [
+                    {"content_type": "text", "title": "Under 50",   "payload": "BUDGET_50"},
+                    {"content_type": "text", "title": "Under 100",  "payload": "BUDGET_100"},
+                    {"content_type": "text", "title": "Under 200",  "payload": "BUDGET_200"},
+                    {"content_type": "text", "title": "Under 500",  "payload": "BUDGET_500"},
+                    {"content_type": "text", "title": "Under 1000", "payload": "BUDGET_1000"},
+                ],
+            )
+
+        if raw_u_h.startswith("BUDGET_") or state.get("_filter_step") == "budget":
+            state.pop("_filter_step", None)
+            if raw_u_h.startswith("BUDGET_"):
+                budget_val = float(raw_u_h[7:])
+            else:
+                budget_val = _parse_budget_intent(raw.lower()) or 0
+            if budget_val:
+                filtered = _apply_hotel_filters(hotels, budget=budget_val)
+                if filtered:
+                    state["_hotel_results"] = filtered
+                    hotels = filtered
+                    lines = [f"{i+1}. {h.get('name','Hotel')} — From {h.get('currency','USD')} {min((r.get('price_per_night',9999) for r in h.get('available_rooms',[{'price_per_night':9999}])),default=9999):.0f}/night"
+                             for i, h in enumerate(filtered[:5])]
+                    buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(filtered[:5])]
+                    return (f"Hotels under {budget_val:.0f} per night:\n\n" + "\n".join(lines), buttons[:13])
+                return ("No hotels found under that budget. Try a higher amount.", [{"content_type": "text", "title": "Back to Hotels", "payload": "RESTART"}])
+
+        if raw_u_h == "FILTER_STARS":
+            return (
+                "Select minimum star rating:",
+                [
+                    {"content_type": "text", "title": "5-Star only",   "payload": "STARS_5"},
+                    {"content_type": "text", "title": "4-Star & above","payload": "STARS_4"},
+                    {"content_type": "text", "title": "3-Star & above","payload": "STARS_3"},
+                    {"content_type": "text", "title": "Any rating",    "payload": "STARS_ANY"},
+                ],
+            )
+
+        if raw_u_h.startswith("STARS_"):
+            star_num = raw_u_h[6:]
+            if star_num != "ANY":
+                try:
+                    s = int(star_num)
+                    filtered = _apply_hotel_filters(hotels, stars=s)
+                    if filtered:
+                        state["_hotel_results"] = filtered
+                        hotels = filtered
+                except Exception:
+                    pass
+            lines = [f"{i+1}. {h.get('name','Hotel')} {'★'*(h.get('star_rating') or 0)}" for i, h in enumerate(hotels[:5])]
+            buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(hotels[:5])]
+            return ("Filtered results:\n\n" + "\n".join(lines), buttons[:13])
+
+        if raw_u_h == "FILTER_AMENITY":
+            return (
+                "Filter by amenities — select all that apply then tap Apply:",
+                [
+                    {"content_type": "text", "title": "Pool",          "payload": "AMN_POOL"},
+                    {"content_type": "text", "title": "Spa",           "payload": "AMN_SPA"},
+                    {"content_type": "text", "title": "Gym",           "payload": "AMN_GYM"},
+                    {"content_type": "text", "title": "Free Breakfast","payload": "AMN_BREAKFAST"},
+                    {"content_type": "text", "title": "Free Parking",  "payload": "AMN_PARKING"},
+                    {"content_type": "text", "title": "Pet Friendly",  "payload": "AMN_PETS"},
+                    {"content_type": "text", "title": "Wheelchair",    "payload": "AMN_WHEELCHAIR"},
+                ],
+            )
+
+        if raw_u_h.startswith("AMN_"):
+            amn = raw_u_h[4:].lower()
+            filtered = _apply_hotel_filters(hotels, amenities=[amn])
+            if filtered:
+                state["_hotel_results"] = filtered
+                hotels = filtered
+            lines = [f"{i+1}. {h.get('name','Hotel')}" for i, h in enumerate(hotels[:5])]
+            buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(hotels[:5])]
+            return (f"Hotels with {amn}:\n\n" + "\n".join(lines), buttons[:13])
+
+        if raw_u_h in ("SORT_PRICE_ASC",):
+            hotels.sort(key=lambda h: min((r.get("price_per_night", 9999) for r in h.get("available_rooms", [{"price_per_night": 9999}])), default=9999))
+            state["_hotel_results"] = hotels
+            lines = [f"{i+1}. {h.get('name','Hotel')} — From {h.get('currency','USD')} {min((r.get('price_per_night',9999) for r in h.get('available_rooms',[{'price_per_night':9999}])),default=9999):.0f}/n" for i, h in enumerate(hotels[:5])]
+            buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(hotels[:5])]
+            return ("Sorted cheapest first:\n\n" + "\n".join(lines), buttons[:13])
+
+        if raw_u_h in ("SORT_RATING",):
+            hotels.sort(key=lambda h: h.get("rating", 0), reverse=True)
+            state["_hotel_results"] = hotels
+            lines = [f"{i+1}. {h.get('name','Hotel')} — Rating: {h.get('rating','N/A')}" for i, h in enumerate(hotels[:5])]
+            buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(hotels[:5])]
+            return ("Sorted by rating (highest first):\n\n" + "\n".join(lines), buttons[:13])
+
+        if raw_u_h in ("FILTER_CLEAR", "FILTER_BUDGET_UP", "FILTER_STARS_DOWN"):
+            # Re-run search without filters — just re-display all
+            lines = [f"{i+1}. {h.get('name','Hotel')} {'★'*(h.get('star_rating') or 0)}" for i, h in enumerate(hotels[:5])]
+            buttons = [{"content_type": "text", "title": f"{i+1}. {h.get('name','Hotel')}"[:20], "payload": f"HOTEL_{i}"} for i, h in enumerate(hotels[:5])]
+            return ("All hotels (filters cleared):\n\n" + "\n".join(lines), buttons[:13])
+
+        # ── Compare hotels (Part C5) ──────────────────────────────────────────
+        if raw_u_h.startswith("COMPARE_"):
+            parts = raw_u_h[8:].split("_VS_")
+            if len(parts) == 2:
+                try:
+                    h1 = hotels[int(parts[0])]
+                    h2 = hotels[int(parts[1])]
+                    cur = h1.get("currency", "USD")
+                    def _min_price(h):
+                        return min((r.get("price_per_night",0) for r in h.get("available_rooms",[]) if r.get("price_per_night")), default=0)
+                    def _amenity(h, key):
+                        ams = str(h.get("amenities", "")).lower()
+                        return "Yes" if key.lower() in ams else "No"
+                    text = (
+                        f"Comparing {h1.get('name')} vs {h2.get('name')}:\n\n"
+                        f"Stars   : {'★'*(h1.get('star_rating') or 0)} vs {'★'*(h2.get('star_rating') or 0)}\n"
+                        f"Price   : {cur} {_min_price(h1):.0f} vs {cur} {_min_price(h2):.0f}/night\n"
+                        f"Rating  : {h1.get('rating','N/A')} vs {h2.get('rating','N/A')}\n"
+                        f"Pool    : {_amenity(h1,'pool')} vs {_amenity(h2,'pool')}\n"
+                        f"Spa     : {_amenity(h1,'spa')} vs {_amenity(h2,'spa')}\n"
+                        f"Gym     : {_amenity(h1,'gym')} vs {_amenity(h2,'gym')}\n"
+                        f"WiFi    : {_amenity(h1,'wifi')} vs {_amenity(h2,'wifi')}\n"
+                        f"Parking : {_amenity(h1,'parking')} vs {_amenity(h2,'parking')}\n"
+                    )
+                    return text, [
+                        {"content_type": "text", "title": f"Book {h1.get('name','Hotel 1')}"[:20], "payload": f"HOTEL_{int(parts[0])}"},
+                        {"content_type": "text", "title": f"Book {h2.get('name','Hotel 2')}"[:20], "payload": f"HOTEL_{int(parts[1])}"},
+                        {"content_type": "text", "title": "Back to list", "payload": "RESTART"},
+                    ]
+                except Exception:
+                    pass
+
+        # ── Map view (Part C8) ────────────────────────────────────────────────
+        if raw_u_h in ("VIEW_MAP", "SHOW_MAP"):
+            hotel_name = state.get("selected_hotel", {}).get("name", "Hotel")
+            city_n = state.get("city", "")
+            maps_url = f"https://maps.google.com/?q={hotel_name.replace(' ', '+')}+{city_n.replace(' ', '+')}"
+            return (f"View on map:\n{hotel_name}, {city_n}\n\n{maps_url}", _MAIN_BUTTONS)
+
+        # ── Price alert (Part C7) ─────────────────────────────────────────────
+        if raw_u_h == "PRICE_ALERT":
+            return (
+                "Price alert set! I will notify you if the price drops for your selected hotel.\n\n"
+                "(Alerts are sent via Messenger when a price change is detected.)",
+                _MAIN_BUTTONS,
+            )
+
 
         if raw.upper().startswith("HOTEL_"):
             try:
@@ -1411,7 +1657,13 @@ def _handle_booking_flow(
     if step == "name":
         name = raw_message.strip()
         if len(name) < 2:
-            return "Please enter a valid full name.", []
+            return ("Please enter your full name (at least 2 characters).", [])
+        # O14 — name is all digits
+        if re.fullmatch(r'[\d\s\+\-\.]+', name):
+            return ("That does not look like a name. Please enter your full name.", [])
+        # O14 — single character/word that is too short
+        if len(name.replace(" ", "")) < 2:
+            return ("Please enter your full name.", [])
         state["guest_name"] = name
         state["step"]       = "email"
         first = name.split()[0]
@@ -1441,11 +1693,37 @@ def _handle_booking_flow(
     # ── STEP: phone ───────────────────────────────────────────────────────────
     if step == "phone":
         raw = raw_message.strip()
+        # O16 — country code button reply (PHONE_+91XXXXXXXXXX)
+        if raw.upper().startswith("PHONE_"):
+            raw = raw[6:]  # strip the PHONE_ prefix, treat rest as the phone number
         if raw.upper() in ("SKIP", "SKIP_PHONE", "NO", "NO THANKS", "NONE"):
             state["guest_phone"] = ""
         else:
             cleaned = re.sub(r'[^\d\+\-\s\(\)]', '', raw).strip()
-            state["guest_phone"] = cleaned if len(cleaned) >= 7 else ""
+            digits_only = re.sub(r'\D', '', cleaned)
+            # O16 — 10-digit number without country code: suggest prefix
+            if cleaned and not cleaned.startswith('+') and len(digits_only) == 10:
+                # Store provisionally and offer country code suggestions
+                state["_raw_phone"] = cleaned
+                return (
+                    f"Is {cleaned} a local number? Please add the country code:\n\n"
+                    "Tap your country or type the full number with + prefix:",
+                    [
+                        {"content_type": "text", "title": "+91 India",
+                         "payload": f"PHONE_+91{digits_only}"},
+                        {"content_type": "text", "title": "+1 USA/Canada",
+                         "payload": f"PHONE_+1{digits_only}"},
+                        {"content_type": "text", "title": "+44 UK",
+                         "payload": f"PHONE_+44{digits_only}"},
+                        {"content_type": "text", "title": "+971 UAE",
+                         "payload": f"PHONE_+971{digits_only}"},
+                        {"content_type": "text", "title": "Use as-is",
+                         "payload": f"PHONE_{cleaned}"},
+                        {"content_type": "text", "title": "Skip",
+                         "payload": "SKIP_PHONE"},
+                    ],
+                )
+            state["guest_phone"] = cleaned if len(digits_only) >= 7 else ""
         state["step"] = "requests"
         return (
             "Any special requests for your stay?\n\n"
@@ -1844,8 +2122,16 @@ def _create_booking(sender_id: str, state: dict) -> tuple[str, list]:
     )
 
 
+_STATUS_ICON = {
+    "confirmed": "✅",
+    "cancelled":  "❌",
+    "pending":    "⏳",
+    "completed":  "🏁",
+}
+
+
 def _show_my_bookings(sender_id: str, state: dict) -> tuple[str, list]:
-    """Fetch and display the user's recent bookings."""
+    """Fetch and display the user's recent bookings with status icons and amounts."""
     if not _DB_AVAILABLE:
         return (
             "I cannot access your booking history right now. Please try again later.",
@@ -1875,7 +2161,10 @@ def _show_my_bookings(sender_id: str, state: dict) -> tuple[str, list]:
         return (
             "You do not have any bookings yet.\n\n"
             "Tap Book a Hotel to make your first reservation.",
-            _MAIN_BUTTONS,
+            [
+                {"content_type": "text", "title": "Book a Hotel", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Main Menu",    "payload": "ACTION_HELP"},
+            ],
         )
 
     lines = []
@@ -1884,24 +2173,99 @@ def _show_my_bookings(sender_id: str, state: dict) -> tuple[str, list]:
         hotel  = b.get("hotel_name", b.get("name", "Hotel"))
         ci     = b.get("check_in",  "")
         co     = b.get("check_out", "")
-        status = (b.get("status") or "pending").capitalize()
+        status = (b.get("status") or "pending").lower()
+        icon   = _STATUS_ICON.get(status, "ℹ️")
         amt    = b.get("total_amount")
         curr   = b.get("currency", "")
         p_s    = f"  {curr} {float(amt):.0f}" if amt else ""
-        lines.append(f"\u2022 {ref} \u2014 {hotel}\n  {ci} to {co}  [{status}]{p_s}")
+        lines.append(
+            f"{icon} {ref} — {hotel}\n"
+            f"   {_pretty_date(ci)} → {_pretty_date(co)}  [{status.capitalize()}]{p_s}\n"
+            f"   Type 'view {ref}' for details"
+        )
+
+    quick_replies = [
+        {"content_type": "text", "title": "Cancel a Booking",  "payload": "CANCEL_BOOKING"},
+        {"content_type": "text", "title": "Modify a Booking",  "payload": "MODIFY_BOOKING"},
+        {"content_type": "text", "title": "New Booking",       "payload": "ACTION_BOOK"},
+    ]
+    # Add detail buttons for first 3 bookings
+    for b in bookings[:2]:
+        ref = b.get("booking_reference", "")
+        if ref:
+            quick_replies.insert(0, {
+                "content_type": "text",
+                "title": f"View {ref[:10]}",
+                "payload": f"BOOKING_DETAIL_{ref}",
+            })
 
     return (
         f"Your recent bookings ({len(bookings)}):\n\n" + "\n\n".join(lines) +
-        "\n\nTo cancel a booking tap Cancel Booking and enter the reference.",
-        [
-            {"content_type": "text", "title": "Cancel a Booking",
-             "payload": "CANCEL_BOOKING"},
-            {"content_type": "text", "title": "New Booking",
-             "payload": "ACTION_BOOK"},
-            {"content_type": "text", "title": "Go Home",
-             "payload": "ACTION_HELP"},
-        ],
+        "\n\nTap a booking to see full details.",
+        quick_replies[:11],  # Messenger limit 13 quick replies
     )
+
+
+def _show_booking_detail(booking: dict) -> tuple[str, list]:
+    """Return full detail view for a single booking (Part G2)."""
+    ref    = booking.get("booking_reference", "N/A")
+    hotel  = booking.get("hotel_name", booking.get("name", ""))
+    ci     = booking.get("check_in",  "")
+    co     = booking.get("check_out", "")
+    room   = booking.get("room_type_code", booking.get("room_name", ""))
+    meal   = booking.get("meal_plan_code", "")
+    guests = booking.get("adults", "")
+    child  = booking.get("children", 0)
+    reqs   = booking.get("special_requests", "") or "None"
+    pay    = booking.get("payment_method", "")
+    amt    = booking.get("total_amount")
+    curr   = booking.get("currency", "")
+    p_s    = f"{curr} {float(amt):.2f}" if amt else ""
+    status = (booking.get("status") or "pending").capitalize()
+    icon   = _STATUS_ICON.get(status.lower(), "ℹ️")
+    guest_name  = booking.get("guest_name", "")
+    guest_email = booking.get("guest_email", "")
+    guest_phone = booking.get("guest_phone", "")
+
+    # Free cancellation deadline
+    deadline_s = ""
+    try:
+        ci_date  = datetime.strptime(ci, "%Y-%m-%d").date()
+        deadline = ci_date - timedelta(days=3)
+        today    = date.today()
+        if today <= deadline:
+            deadline_s = f"\nFree cancel by: {_pretty_date(str(deadline))}"
+        else:
+            deadline_s = "\nOutside free cancellation window"
+    except Exception:
+        pass
+
+    detail = (
+        f"Booking Details — {ref}\n"
+        f"{'─'*28}\n"
+        f"{icon} Status       : {status}\n"
+        f"Hotel        : {hotel}\n"
+        f"Room         : {room}\n"
+        f"Meal Plan    : {meal or 'Room only'}\n"
+        f"Check-in     : {_pretty_date(ci)}\n"
+        f"Check-out    : {_pretty_date(co)}\n"
+        f"Guests       : {guests} adults"
+        + (f", {child} children" if child else "") + "\n"
+        f"Special Reqs : {reqs}\n"
+        f"Payment      : {pay or 'N/A'}\n"
+        f"Total        : {p_s}"
+        f"{deadline_s}"
+    )
+
+    btns = [
+        {"content_type": "text", "title": "Modify Booking", "payload": "MODIFY_BOOKING"},
+        {"content_type": "text", "title": "Cancel Booking", "payload": "CANCEL_BOOKING"},
+        {"content_type": "text", "title": "Download Receipt", "payload": f"RECEIPT_{ref}"},
+        {"content_type": "text", "title": "Pre-Arrival",    "payload": "PRE_ARRIVAL"},
+        {"content_type": "text", "title": "Share Booking",  "payload": f"SHARE_{ref}"},
+        {"content_type": "text", "title": "My Bookings",    "payload": "MY_BOOKINGS"},
+    ]
+    return detail, btns
 
 
 def _handle_cancel_ref(
@@ -1910,10 +2274,10 @@ def _handle_cancel_ref(
     """User just entered a booking reference for cancellation."""
     ref = raw_message.strip().upper()
 
-    if not re.match(r'^BB[A-Z0-9]{6,10}$', ref):
+    if not re.match(r'^BB[A-Z0-9\-]{4,20}$', ref):
         return (
             "That does not look like a valid booking reference.\n"
-            "It should start with BB, e.g. BBXYZ12345. Please try again:",
+            "Booking references start with BB, e.g. BB-MUM-20260320-X7K2. Please try again:",
             [{"content_type": "text", "title": "Go Back", "payload": "RESTART"}],
         )
 
@@ -1930,14 +2294,19 @@ def _handle_cancel_ref(
         return (
             f"Booking reference {ref} was not found.\n"
             "Please check the reference and try again.",
-            [{"content_type": "text", "title": "Try Again", "payload": "CANCEL_BOOKING"},
-             {"content_type": "text", "title": "Go Back",   "payload": "RESTART"}],
+            [{"content_type": "text", "title": "Search by Email", "payload": "MY_BOOKINGS"},
+             {"content_type": "text", "title": "Go Back",          "payload": "RESTART"}],
         )
 
     if booking.get("status") == "cancelled":
+        cancelled_on = booking.get("cancelled_at", "")
+        cancelled_on_s = f" on {cancelled_on}" if cancelled_on else ""
         return (
-            f"Booking {ref} is already cancelled.",
-            _MAIN_BUTTONS,
+            f"Booking {ref} was already cancelled{cancelled_on_s}.\n"
+            "It cannot be modified or cancelled again.\n\n"
+            "Would you like to make a new booking?",
+            [{"content_type": "text", "title": "Book a Hotel", "payload": "ACTION_BOOK"},
+             {"content_type": "text", "title": "Main Menu",    "payload": "RESTART"}],
         )
 
     hotel = booking.get("hotel_name", booking.get("name", ""))
@@ -1945,22 +2314,56 @@ def _handle_cancel_ref(
     co    = booking.get("check_out", "")
     amt   = booking.get("total_amount")
     curr  = booking.get("currency", "")
-    p_s   = f"{curr} {float(amt):.0f}" if amt else ""
+    p_s   = f"{curr} {float(amt):.2f}" if amt else ""
+
+    # ── Cancellation policy check (Part G5) ───────────────────────────────────
+    today = date.today()
+    free_cancel_days = 3  # default 72 hrs
+    try:
+        ci_date = datetime.strptime(ci, "%Y-%m-%d").date()
+        deadline = ci_date - timedelta(days=free_cancel_days)
+        within_free = today <= deadline
+        penalty_note = ""
+        if within_free:
+            policy_line = (
+                f"Free cancellation before: {_pretty_date(str(deadline))}\n"
+                f"Today: {_pretty_date(str(today))}  — within free cancellation period\n"
+                f"Refund: {p_s} (full refund)"
+            )
+        else:
+            # 1-night penalty
+            try:
+                nights = (datetime.strptime(co, "%Y-%m-%d") - datetime.strptime(ci, "%Y-%m-%d")).days
+                penalty = float(amt) / nights if (amt and nights > 0) else 0
+                refund  = float(amt) - penalty if amt else 0
+                policy_line = (
+                    f"Outside free cancellation (deadline was {_pretty_date(str(deadline))})\n"
+                    f"Cancellation fee: {curr} {penalty:.2f} (1 night)\n"
+                    f"Refund if cancelled: {curr} {refund:.2f}"
+                )
+            except Exception:
+                policy_line = "Cancellation policy: fee may apply (contact hotel)."
+    except Exception:
+        within_free = True
+        policy_line = f"Cancellation policy applies. Refund: {p_s}"
 
     state["cancel_ref"]        = ref
     state["cancel_hotel_name"] = hotel
+    state["cancel_within_free"]= within_free
     state["step"]              = "cancel_confirm"
 
     return (
-        f"Are you sure you want to cancel this booking?\n\n"
-        f"Ref   : {ref}\n"
+        f"Cancellation request for {ref}\n\n"
         f"Hotel : {hotel}\n"
         f"Dates : {ci} to {co}\n"
         f"Total : {p_s}\n\n"
-        "This action cannot be undone.",
+        f"Cancellation Policy:\n{policy_line}\n\n"
+        "Are you sure you want to cancel?",
         [
-            {"content_type": "text", "title": "Yes, Cancel It", "payload": "CANCEL_CONFIRM"},
-            {"content_type": "text", "title": "No, Keep It",    "payload": "RESTART"},
+            {"content_type": "text", "title": "Yes, Cancel It",    "payload": "CANCEL_CONFIRM"},
+            {"content_type": "text", "title": "No, Keep Booking",  "payload": "RESTART"},
+            {"content_type": "text", "title": "Modify Instead",    "payload": "MODIFY_BOOKING"},
+            {"content_type": "text", "title": "Speak to Agent",    "payload": "AGENT_HANDOFF"},
         ],
     )
 
@@ -1971,6 +2374,7 @@ def _handle_cancel_confirm(
     """Process the user's confirmation/denial of a cancellation."""
     raw   = en_lower.strip()
     ref   = state.get("cancel_ref", "")
+    hotel = state.get("cancel_hotel_name", "")
     _yes  = {"yes", "cancel", "confirm", "ok", "sure", "proceed",
              "yep", "absolutely", "cancel_confirm"}
 
@@ -1983,30 +2387,43 @@ def _handle_cancel_confirm(
                 logger.error("cancel_booking: %s", e)
 
         state["step"] = None
-        state.pop("cancel_ref",        None)
-        state.pop("cancel_hotel_name", None)
+        state.pop("cancel_ref",         None)
+        state.pop("cancel_hotel_name",  None)
+        state.pop("cancel_within_free", None)
 
         if success:
+            # Notify hotel of cancellation
+            _notify_hotel_cancellation(
+                booking_ref=ref, hotel_name=hotel, hotel_email="",
+                guest_name=state.get("guest_name", ""),
+                cancelled_date=str(date.today()),
+                refund_amount=0.0, currency="",
+            )
             return (
                 f"Booking {ref} has been cancelled.\n\n"
                 "Your refund (if applicable) will be processed\n"
-                "according to the hotel cancellation policy.\n\n"
+                "within 5–7 business days to your original payment method.\n\n"
                 "Is there anything else I can help you with?",
-                _MAIN_BUTTONS,
+                [
+                    {"content_type": "text", "title": "Book a New Hotel", "payload": "ACTION_BOOK"},
+                    {"content_type": "text", "title": "My Bookings",      "payload": "MY_BOOKINGS"},
+                    {"content_type": "text", "title": "Main Menu",        "payload": "RESTART"},
+                ],
             )
         return (
             f"Sorry, I could not cancel {ref} right now.\n"
             "Please try again later or contact support.",
-            _MAIN_BUTTONS,
+            [{"content_type": "text", "title": "Speak to Agent", "payload": "AGENT_HANDOFF"},
+             {"content_type": "text", "title": "Try Again",      "payload": "CANCEL_BOOKING"}],
         )
 
     # User said no
     state["step"] = None
-    state.pop("cancel_ref",        None)
-    state.pop("cancel_hotel_name", None)
+    state.pop("cancel_ref",         None)
+    state.pop("cancel_hotel_name",  None)
+    state.pop("cancel_within_free", None)
     return (
-        "Your booking is still active.\n\n"
-        "Is there anything else I can help you with?",
+        "Your booking is still active. Is there anything else I can help you with?",
         _MAIN_BUTTONS,
     )
 
@@ -2014,12 +2431,14 @@ def _handle_cancel_confirm(
 def _handle_lookup_ref(
     sender_id: str, state: dict, raw_message: str
 ) -> tuple[str, list]:
-    """User entered a booking reference to look up."""
+    """User entered a booking reference to look up (Part G1/G2)."""
     ref = raw_message.strip().upper()
 
-    if not re.match(r'^BB[A-Z0-9]{6,10}$', ref):
+    if not re.match(r'^BB[A-Z0-9\-]{4,20}$', ref):
         return (
-            "That does not look like a valid booking reference. Please try again.",
+            "That does not look like a valid booking reference.\n"
+            "References start with BB, e.g. BB-MUM-20260320-X7K2.\n"
+            "Please try again:",
             [{"content_type": "text", "title": "Go Back", "payload": "RESTART"}],
         )
 
@@ -2036,40 +2455,104 @@ def _handle_lookup_ref(
     if not booking:
         return (
             f"Booking {ref} was not found. Please check the reference.",
-            _MAIN_BUTTONS,
+            [
+                {"content_type": "text", "title": "Try Again",   "payload": "LOOKUP_BOOKING"},
+                {"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Main Menu",   "payload": "RESTART"},
+            ],
         )
 
-    hotel  = booking.get("hotel_name", booking.get("name", ""))
-    ci     = booking.get("check_in",  "")
-    co     = booking.get("check_out", "")
-    room   = booking.get("room_type_code", "")
-    status = (booking.get("status") or "").capitalize()
-    paid   = (booking.get("payment_status") or "").capitalize()
-    amt    = booking.get("total_amount")
-    curr   = booking.get("currency", "")
-    p_s    = f"{curr} {float(amt):.0f}" if amt else ""
+    return _show_booking_detail(booking)
 
+
+# ── Part G7 — Share Booking ────────────────────────────────────────────────────
+
+def _handle_share_booking(ref: str) -> tuple[str, list]:
+    """Generate a shareable booking link and options (Part G7)."""
+    view_url = f"https://bookbot.io/view/{ref}"
     return (
-        f"Booking Details\n"
-        f"{chr(8212)*20}\n"
-        f"Reference : {ref}\n"
-        f"Hotel     : {hotel}\n"
-        f"Room      : {room}\n"
-        f"Check-in  : {ci}\n"
-        f"Check-out : {co}\n"
-        f"Status    : {status}\n"
-        f"Payment   : {paid}\n"
-        f"Total     : {p_s}",
+        f"Share your booking {ref}\n\n"
+        f"View link:\n{view_url}\n\n"
+        "How would you like to share it?",
         [
-            {"content_type": "text", "title": "Cancel Booking",
-             "payload": "CANCEL_BOOKING"},
-            {"content_type": "text", "title": "Book Another",
-             "payload": "ACTION_BOOK"},
-            {"content_type": "text", "title": "My Bookings",
-             "payload": "MY_BOOKINGS"},
+            {"content_type": "text", "title": "Send to Email",  "payload": f"SHARE_EMAIL_{ref}"},
+            {"content_type": "text", "title": "Download PDF",   "payload": f"RECEIPT_{ref}"},
+            {"content_type": "text", "title": "Copy Link",      "payload": f"COPY_LINK_{ref}"},
+            {"content_type": "text", "title": "My Bookings",    "payload": "MY_BOOKINGS"},
         ],
     )
 
+
+# ── Part G8 — Receipt / Invoice ────────────────────────────────────────────────
+
+def _handle_receipt(ref: str, invoice: bool = False) -> tuple[str, list]:
+    """Offer receipt and invoice download options (Part G8)."""
+    doc_type = "Invoice" if invoice else "Receipt"
+    base_url = f"https://bookbot.io/receipt/{ref}"
+    return (
+        f"{doc_type} for Booking {ref}\n\n"
+        "Choose your download format:",
+        [
+            {"content_type": "text", "title": "PDF Receipt",
+             "payload": f"DL_PDF_{ref}"},
+            {"content_type": "text", "title": "GST Invoice",
+             "payload": f"DL_GST_{ref}"},
+            {"content_type": "text", "title": "Email Receipt",
+             "payload": f"EMAIL_RECEIPT_{ref}"},
+            {"content_type": "text", "title": "Corporate Invoice",
+             "payload": f"DL_CORP_{ref}"},
+            {"content_type": "text", "title": "Back",
+             "payload": f"BOOKING_DETAIL_{ref}"},
+        ],
+    )
+
+
+# ── Part G6 — Re-book same hotel ───────────────────────────────────────────────
+
+def _handle_rebook(sender_id: str, state: dict, ref: str) -> tuple[str, list]:
+    """Pre-fill booking state with last booking's hotel/room and ask for new dates (Part G6)."""
+    booking = None
+    if _DB_AVAILABLE:
+        try:
+            booking = get_booking_by_ref(ref)
+        except Exception as e:
+            logger.error("_handle_rebook get_booking_by_ref: %s", e)
+
+    if not booking:
+        state["step"] = "city"
+        return (
+            "I could not find that booking. Let's start a fresh search — which city?",
+            [],
+        )
+
+    hotel_id   = booking.get("hotel_id",        "")
+    hotel_name = booking.get("hotel_name", booking.get("name", ""))
+    room_code  = booking.get("room_type_code",   "")
+    meal_code  = booking.get("meal_plan_code",   "")
+    adults     = booking.get("adults",           1)
+    children   = booking.get("children",         0)
+
+    # Pre-fill session with previous choices
+    state["hotel_id"]     = hotel_id
+    state["hotel_name"]   = hotel_name
+    state["room_code"]    = room_code
+    state["meal_code"]    = meal_code
+    state["num_adults"]   = adults
+    state["num_children"] = children
+    state["step"]         = "checkin"
+
+    return (
+        f"Great! Let's rebook {hotel_name}.\n\n"
+        f"Previous room    : {room_code}\n"
+        f"Previous meal    : {meal_code or 'Room only'}\n"
+        f"Guests           : {adults} adults"
+        + (f", {children} children" if children else "") + "\n\n"
+        "Please enter your new check-in date (DD/MM/YYYY):",
+        [],
+    )
+
+
+# ── Hotel admin notifications ──────────────────────────────────────────────────
 
 def _notify_hotel_new_booking(
     booking_ref: str, hotel_name: str, hotel_email: str,
@@ -3340,6 +3823,56 @@ def _handle_advanced_booking_flow(
 # ─────────────────────────────────────────────────────────────────────────────
 # FAQ / HELP HANDLER
 # ─────────────────────────────────────────────────────────────────────────────
+# Part P — Platform-specific handlers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TELEGRAM_COMMANDS = {
+    "/start":       ("GET_STARTED",  "book"),
+    "/book":        ("ACTION_BOOK",  "book"),
+    "/mybookings":  ("MY_BOOKINGS",  "my bookings"),
+    "/help":        ("ACTION_HELP",  "help"),
+    "/cancel":      ("CANCEL_BOOKING", "cancel booking"),
+    "/loyalty":     ("LOYALTY_MENU",   "loyalty"),
+    "/language":    ("ACTION_CHANGE_LANG", "change language"),
+    "/agent":       ("AGENT_HANDOFF",  "agent"),
+    "/restart":     ("RESTART",        "restart"),
+}
+
+_SMS_MENU = (
+    "BookBot – Reply with a number:\n"
+    "1. Book a Hotel\n"
+    "2. My Bookings\n"
+    "3. Cancel a Booking\n"
+    "4. Loyalty Rewards\n"
+    "5. Help\n"
+    "6. Speak to Agent\n"
+    "0. Main Menu / Restart"
+)
+
+_SMS_MENU_MAP = {
+    "1": "ACTION_BOOK", "2": "MY_BOOKINGS", "3": "CANCEL_BOOKING",
+    "4": "LOYALTY_MENU", "5": "ACTION_HELP", "6": "AGENT_HANDOFF",
+    "0": "RESTART",
+}
+
+
+def _resolve_telegram_command(user_message: str) -> str | None:
+    """If message is a Telegram /command, return the equivalent payload string."""
+    stripped = user_message.strip().lower()
+    cmd = stripped.split()[0]  # handle /help@botname style
+    if "@" in cmd:
+        cmd = cmd.split("@")[0]
+    entry = _TELEGRAM_COMMANDS.get(cmd)
+    return entry[0] if entry else None
+
+
+def _resolve_sms_menu(user_message: str) -> str | None:
+    """If message is a single digit from the SMS menu, return equivalent payload."""
+    msg = user_message.strip()
+    return _SMS_MENU_MAP.get(msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _handle_faq(en_lower: str, state: dict) -> str | None:
     """Return a FAQ answer if the query matches, else None."""
@@ -3738,6 +4271,110 @@ async def process_message(request: Request):
 
         # Handle quick-reply button payloads
         raw_upper = user_message.strip().upper()
+
+        # ── Part P: Telegram /commands and SMS menu digit resolution ──────────
+        _tg_payload = _resolve_telegram_command(user_message)
+        if _tg_payload:
+            raw_upper = _tg_payload
+            user_message = _tg_payload
+        else:
+            _sms_payload = _resolve_sms_menu(user_message)
+            if _sms_payload:
+                raw_upper    = _sms_payload
+                user_message = _sms_payload
+
+        # ── Part O38: SQL injection / XSS / script injection block ────────────
+        _INJECT_PATTERNS = [
+            r"(?i)(select\s.+from\s|insert\s+into|drop\s+table|delete\s+from"
+            r"|update\s+.+set\s|union\s+select|or\s+1=1|--\s|;\s*drop|<script"
+            r"|javascript:|onerror=|onload=|eval\(|exec\(|system\()",
+        ]
+        import re as _re2
+        if any(_re2.search(p, user_message) for p in _INJECT_PATTERNS):
+            return {"text": "I did not understand that. How can I help you?",
+                    "buttons": _MAIN_BUTTONS, "audio_b64": None, "lang": lang}
+
+        # ── Part O45: Under-18 warning ────────────────────────────────────────
+        _minor_re = _re2.search(
+            r'\b(i am|i\'m|am)\s+(1[0-7]|[1-9])\s*(years?\s*old|yrs?\s*old|year\s*old)?\b|'
+            r'\bi\'m\s+a\s+minor\b|\bminor\b|\bi\s+am\s+underage\b',
+            user_message.lower()
+        )
+        if _minor_re:
+            return {
+                "text": (
+                    "I am sorry, but hotel bookings require the primary guest to be 18 or over.\n\n"
+                    "Please ask a parent or guardian to complete the booking on your behalf."
+                ),
+                "buttons": _MAIN_BUTTONS, "audio_b64": None, "lang": lang,
+            }
+
+        # ── Part O26-O31: Payment error payloads ──────────────────────────────
+        if raw_upper == "PAY_CARD_DECLINED":
+            return {
+                "text": (
+                    "Your card was declined. This can happen due to:\n"
+                    "- Insufficient funds\n"
+                    "- Incorrect card details\n"
+                    "- Bank security block\n\n"
+                    "Please try a different card or payment method."
+                ),
+                "buttons": [
+                    {"content_type": "text", "title": "Try Again",         "payload": "PAY_CARD"},
+                    {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                    {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
+                    {"content_type": "text", "title": "Speak to Agent",    "payload": "AGENT_HANDOFF"},
+                ],
+                "audio_b64": None, "lang": lang,
+            }
+
+        if raw_upper == "PAY_TIMEOUT":
+            return {
+                "text": (
+                    "Your payment session timed out. No charge was made.\n\n"
+                    "Please try again — your booking details are still saved."
+                ),
+                "buttons": [
+                    {"content_type": "text", "title": "Try Payment Again", "payload": "PAY_CARD"},
+                    {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                ],
+                "audio_b64": None, "lang": lang,
+            }
+
+        if raw_upper == "PAY_DOUBLE":
+            return {
+                "text": (
+                    "It looks like you may have been charged twice.\n\n"
+                    "Do not worry — our team will review this and issue a refund\n"
+                    "for any duplicate charge within 24 hours.\n\n"
+                    "Please contact us if you need urgent help."
+                ),
+                "buttons": [
+                    {"content_type": "text", "title": "Speak to Agent", "payload": "AGENT_HANDOFF"},
+                    {"content_type": "text", "title": "My Bookings",    "payload": "MY_BOOKINGS"},
+                ],
+                "audio_b64": None, "lang": lang,
+            }
+
+        if raw_upper == "VOUCHER_USED":
+            return {
+                "text": "That voucher has already been used. Each voucher can only be redeemed once.",
+                "buttons": [
+                    {"content_type": "text", "title": "Try Another Code", "payload": "PAY_VOUCHER"},
+                    {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
+                ],
+                "audio_b64": None, "lang": lang,
+            }
+
+        # ── Part O39: Conversation stop/quit/reset keywords ───────────────────
+        if raw_upper in ("STOP", "QUIT", "EXIT", "RESTART", "START_OVER", "START OVER"):
+            _reset_booking_slots(state)
+            state["step"] = None
+            return {
+                "text": "Okay, I have cleared your session. Tap below to start fresh.",
+                "buttons": _MAIN_BUTTONS, "audio_b64": None, "lang": lang,
+            }
+
         if raw_upper == "ACTION_CHANGE_LANG" or any(trigger in en_lower for trigger in _CHANGE_LANG_TRIGGERS) or "change language" in user_message.lower():
             state["lang_confirmed"]      = False
             state["awaiting_lang"]       = True
@@ -3778,6 +4415,93 @@ async def process_message(request: Request):
             "MCITY_", "ROMANTIC_", "ROM_", "WED_",
             "EARLY_CHECKIN", "SPA_BOOKING", "COMPLAINT",
         )
+
+        # ── Part G6/G7/G8: Booking reference action payloads ──────────────────
+        if raw_upper.startswith("BOOKING_DETAIL_"):
+            ref_bd = raw_upper[len("BOOKING_DETAIL_"):]
+            bot_en, buttons = None, []
+            if _DB_AVAILABLE:
+                try:
+                    bk = get_booking_by_ref(ref_bd)
+                    if bk:
+                        bot_en, buttons = _show_booking_detail(bk)
+                except Exception as _e:
+                    logger.error("BOOKING_DETAIL lookup: %s", _e)
+            if not bot_en:
+                bot_en  = f"Booking {ref_bd} was not found."
+                buttons = _MAIN_BUTTONS
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        if raw_upper.startswith("SHARE_") and "_" in raw_upper[6:]:
+            ref_sh = raw_upper[6:]
+            if not ref_sh.startswith("EMAIL_"):
+                bot_en, buttons = _handle_share_booking(ref_sh)
+            else:
+                # SHARE_EMAIL_<ref>
+                _share_ref = ref_sh[6:]
+                state["share_ref"]  = _share_ref
+                state["step"]       = "share_email"
+                bot_en  = f"Please enter the email address to send booking {_share_ref} to:"
+                buttons = [{"content_type": "text", "title": "Cancel", "payload": "RESTART"}]
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        if raw_upper.startswith("RECEIPT_") or raw_upper.startswith("INVOICE_"):
+            _inv  = raw_upper.startswith("INVOICE_")
+            _pref = "INVOICE_" if _inv else "RECEIPT_"
+            ref_rc = raw_upper[len(_pref):]
+            bot_en, buttons = _handle_receipt(ref_rc, invoice=_inv)
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        if raw_upper.startswith("DL_PDF_") or raw_upper.startswith("DL_GST_") or \
+           raw_upper.startswith("DL_CORP_") or raw_upper.startswith("EMAIL_RECEIPT_"):
+            _dl_ref = raw_upper.split("_", 2)[-1]
+            _dl_url = f"https://bookbot.io/receipt/{_dl_ref}"
+            bot_en  = (
+                f"Your document for booking {_dl_ref} is ready.\n"
+                f"Download here:\n{_dl_url}\n\n"
+                "The link will expire in 24 hours."
+            )
+            buttons = [
+                {"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Main Menu",   "payload": "RESTART"},
+            ]
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        if raw_upper.startswith("COPY_LINK_"):
+            _cl_ref = raw_upper[len("COPY_LINK_"):]
+            bot_en  = f"Your booking link:\nhttps://bookbot.io/view/{_cl_ref}"
+            buttons = [{"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"}]
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        if raw_upper.startswith("REBOOK_"):
+            _rb_ref = raw_upper[len("REBOOK_"):]
+            bot_en, buttons = _handle_rebook(sender_id, state, _rb_ref)
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
         _always_booking = raw_upper.startswith(("HOTEL_", "ROOM_", "MEAL_", "CHECKIN_",
                                                  "CHECKOUT_", "GUESTS_", "CONFIRM_", "CANCEL_",
                                                  "SKIP_", "RESELECT_", "ADDON_", "PAY_",
