@@ -12,6 +12,7 @@ fastapi==0.111.0
 uvicorn==0.29.0
 httpx==0.27.0
 python-dotenv==1.0.0
+python-multipart==0.0.9       # required by FastAPI for form/file uploads
 
 # ── Language detection ────────────────────────────────────────────────────────
 langdetect==1.0.9
@@ -24,6 +25,7 @@ sentencepiece>=0.1.99         # tokeniser required by NLLB-200
 protobuf>=3.20.0              # dependency of sentencepiece
 accelerate>=0.27.0            # speeds up model loading on CPU
 datasets>=2.14.0              # HuggingFace datasets (no loading-script datasets used)
+huggingface_hub>=0.22.0       # snapshot_download for cmu-arctic-xvectors parquet
 pandas>=2.0.0                 # read parquet files from HF dataset repos
 pyarrow>=14.0.0               # parquet backend for pandas
 soundfile>=0.12.1             # WAV I/O for SpeechT5 / MMS-TTS output
