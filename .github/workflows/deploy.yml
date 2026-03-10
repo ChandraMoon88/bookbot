@@ -55,6 +55,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check required secrets are set
+        env:
+          HF_TOKEN:    ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ secrets.HF_SPACE_ID }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "❌ ERROR: HF_TOKEN secret is not set in GitHub repo secrets"
+            echo "Go to: https://github.com/ChandraMoon88/bookbot/settings/secrets/actions"
+            exit 1
+          fi
+          if [ -z "$HF_SPACE_ID" ]; then
+            echo "❌ ERROR: HF_SPACE_ID secret is not set in GitHub repo secrets"
+            echo "Go to: https://github.com/ChandraMoon88/bookbot/settings/secrets/actions"
+            exit 1
+          fi
+          echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
+          echo "✅ HF_SPACE_ID = $HF_SPACE_ID"
+
       - name: Install HuggingFace Hub CLI
         run: pip install huggingface_hub
 
