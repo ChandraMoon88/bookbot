@@ -59,13 +59,29 @@ SpeechT5Processor.from_pretrained("microsoft/speecht5_tts",    **HF_KWARGS)
 SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts", **HF_KWARGS)
 SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan",  **HF_KWARGS)
 
-# Pre-fetch CMU Arctic speaker embeddings dataset (tiny — ~2 MB)
-load_dataset(
-    "Matthijs/cmu-arctic-xvectors",
-    split="validation",
-    cache_dir=HF_CACHE,
-    trust_remote_code=True,
-)
+# Pre-fetch CMU Arctic speaker embeddings — bypass loading script, use parquet directly
+import glob, numpy as np
+from huggingface_hub import snapshot_download
+
+SPEAKER_EMB_PATH = os.path.join(HF_CACHE, "speecht5_speaker_embedding.npy")
+try:
+    dataset_path = snapshot_download(
+        "Matthijs/cmu-arctic-xvectors",
+        repo_type="dataset",
+        cache_dir=HF_CACHE,
+        ignore_patterns=["*.py", "*.md"],  # skip broken loading script
+    )
+    parquet_files = sorted(glob.glob(f"{dataset_path}/**/*.parquet", recursive=True))
+    if parquet_files:
+        import pandas as pd
+        df = pd.read_parquet(parquet_files[0])
+        xvec = np.array(df.iloc[7306]["xvector"], dtype=np.float32)
+        np.save(SPEAKER_EMB_PATH, xvec)
+        print(f"      ✅ Speaker embedding cached → {SPEAKER_EMB_PATH}")
+    else:
+        print("      ⚠️  No parquet found in dataset — will use zero fallback at runtime.")
+except Exception as e:
+    print(f"      ⚠️  Speaker embedding pre-fetch failed ({e}) — will use zero fallback at runtime.")
 print("      ✅ SpeechT5 done.")
 
 

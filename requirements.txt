@@ -23,7 +23,9 @@ torch>=2.1.0
 sentencepiece>=0.1.99         # tokeniser required by NLLB-200
 protobuf>=3.20.0              # dependency of sentencepiece
 accelerate>=0.27.0            # speeds up model loading on CPU
-datasets>=2.14.0              # CMU Arctic speaker embeddings for SpeechT5
+datasets>=2.14.0              # HuggingFace datasets (no loading-script datasets used)
+pandas>=2.0.0                 # read parquet files from HF dataset repos
+pyarrow>=14.0.0               # parquet backend for pandas
 soundfile>=0.12.1             # WAV I/O for SpeechT5 / MMS-TTS output
 sentence-transformers>=2.2.2  # semantic hotel re-ranking (all-MiniLM-L6-v2)
 

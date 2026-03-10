@@ -395,13 +395,17 @@ def _get_speecht5():
         _t5_processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
         _t5_model     = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
         _t5_vocoder   = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
-        # Default speaker embedding — CMU Arctic speaker index 7306
-        ds = load_dataset(
-            "Matthijs/cmu-arctic-xvectors",
-            split="validation",
-            trust_remote_code=True,
-        )
-        _t5_speaker_emb = torch.tensor(ds[7306]["xvector"]).unsqueeze(0)
+        # Default speaker embedding — load from pre-cached .npy or fallback to zeros
+        _HF_CACHE = "/app/.cache/huggingface"
+        _EMB_PATH = os.path.join(_HF_CACHE, "speecht5_speaker_embedding.npy")
+        try:
+            import numpy as _np
+            xvec = _np.load(_EMB_PATH)
+            _t5_speaker_emb = torch.tensor(xvec).unsqueeze(0)
+            logger.info("SpeechT5 speaker embedding loaded from cache.")
+        except Exception:
+            logger.warning("Speaker embedding cache not found — using zero fallback.")
+            _t5_speaker_emb = torch.zeros(1, 512)
         logger.info("SpeechT5 ready.")
     return _t5_processor, _t5_model, _t5_vocoder, _t5_speaker_emb
 
