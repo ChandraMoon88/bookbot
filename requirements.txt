@@ -38,9 +38,10 @@ noisereduce==3.0.2
 scipy>=1.13.0             # 1.13.0 not indexed on Render; allow any compatible build
 
 # ── Storage ───────────────────────────────────────────────────────────────────
-redis==5.0.1
-upstash-redis==0.15.0
+redis==5.0.1              # standard redis-py (TCP + rediss:// TLS for Upstash)
+upstash-redis>=1.1.0      # Upstash HTTP REST client for HF Spaces (no TCP needed)
 
-# ── Misc ──────────────────────────────────────────────────────────────────────
-requests==2.31.0
-psycopg2-binary==2.9.9
+# ── Database ──────────────────────────────────────────────────────────────────
+# Direct PostgreSQL with DATABASE_URL — no Supabase SDK needed.
+psycopg2-binary>=2.9.9    # sync driver for processor.py (booking state machine)
+asyncpg>=0.29.0            # async driver for hf_space/db/supabase.py (routers)

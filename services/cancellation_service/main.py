@@ -5,10 +5,8 @@ FastAPI cancellation + refund microservice.
 """
 
 import os
-import json
 import logging
 from datetime import datetime, timezone
-import urllib.request
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -20,40 +18,40 @@ from .stripe_refund import issue_refund
 log = logging.getLogger(__name__)
 app = FastAPI(title="Cancellation Service")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
-def _headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def _get_booking(booking_id: str) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/bookings?id=eq.{booking_id}&select=*"
-    req  = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req) as resp:
-        rows = json.loads(resp.read())
-    if not rows:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            row = cur.fetchone()
+    if not row:
         raise ValueError(f"Booking {booking_id} not found")
-    return rows[0]
+    return dict(row)
 
 
 def _cancel_booking(booking_id: str, refund_usd: float) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/bookings?id=eq.{booking_id}"
-    data = json.dumps({
-        "status":        "cancelled",
-        "cancelled_at":  datetime.now(timezone.utc).isoformat(),
-        "refund_amount": refund_usd,
-        "updated_at":    datetime.now(timezone.utc).isoformat(),
-    }).encode()
-    req = urllib.request.Request(url, data=data, headers=_headers(), method="PATCH")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+    now = datetime.now(timezone.utc)
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE bookings SET status='cancelled', cancelled_at=%s, "
+                "refund_amount=%s, updated_at=%s WHERE id=%s RETURNING *",
+                (now, refund_usd, now, booking_id),
+            )
+            result = cur.fetchone()
+            conn.commit()
+    return dict(result) if result else {}
 
 
 class CancelRequest(BaseModel):

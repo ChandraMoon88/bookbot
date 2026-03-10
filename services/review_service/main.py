@@ -7,10 +7,8 @@ and queues a task to notify the hotel.
 """
 
 import os
-import json
 import logging
 from datetime import datetime, timezone
-import urllib.request
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -21,26 +19,28 @@ from .sentiment import analyse
 log = logging.getLogger(__name__)
 app = FastAPI(title="Review Service")
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
-def _headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
-def _insert(table: str, payload: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/{table}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
+def _insert_review(payload: dict) -> dict:
+    cols = list(payload.keys())
+    phs  = ", ".join(f"%({c})s" for c in cols)
+    sql  = f"INSERT INTO reviews ({', '.join(cols)}) VALUES ({phs}) RETURNING *"
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, payload)
+            result = dict(cur.fetchone())
+            conn.commit()
+    return result
 
 
 class ReviewRequest(BaseModel):
@@ -59,7 +59,7 @@ def submit_review(req: ReviewRequest):
 
     sentiment = analyse(req.text)
 
-    review = _insert("reviews", {
+    review = _insert_review({
         "booking_id":  req.booking_id,
         "guest_id":    req.guest_id,
         "hotel_id":    req.hotel_id,
@@ -67,7 +67,7 @@ def submit_review(req: ReviewRequest):
         "text":        req.text,
         "language":    req.language,
         "sentiment":   sentiment["sentiment"],
-        "created_at":  datetime.now(timezone.utc).isoformat(),
+        "created_at":  datetime.now(timezone.utc),
     })
 
     return {"review_id": review.get("id"), "sentiment": sentiment}
@@ -75,14 +75,14 @@ def submit_review(req: ReviewRequest):
 
 @app.get("/reviews/{hotel_id}")
 def list_reviews(hotel_id: str, limit: int = 20, offset: int = 0):
-    url = (
-        f"{SUPABASE_URL}/rest/v1/reviews"
-        f"?hotel_id=eq.{hotel_id}&order=created_at.desc"
-        f"&limit={limit}&offset={offset}"
-    )
-    req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM reviews WHERE hotel_id=%s "
+                "ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (hotel_id, limit, offset),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
 
 @app.get("/health")

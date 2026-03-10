@@ -50,18 +50,17 @@ def approval(req: ApprovalRequest):
 
 @app.get("/approval/{approval_id}")
 def get_approval(approval_id: str):
-    import os, json, urllib.request
-    SUPA = os.environ.get("SUPABASE_URL", "")
-    KEY  = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    url  = f"{SUPA}/rest/v1/approval_requests?id=eq.{approval_id}"
-    req  = urllib.request.Request(url, headers={
-        "apikey": KEY, "Authorization": f"Bearer {KEY}"
-    })
-    with urllib.request.urlopen(req) as resp:
-        rows = json.loads(resp.read())
-    if not rows:
+    import os, psycopg2, psycopg2.extras
+    dsn = os.environ.get("DATABASE_URL", "")
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    with psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM approval_requests WHERE id = %s", (approval_id,))
+            row = cur.fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Approval not found")
-    return rows[0]
+    return dict(row)
 
 
 @app.get("/health")

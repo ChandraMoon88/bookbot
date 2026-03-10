@@ -16,27 +16,28 @@ import json
 import os
 import sys
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
-def _sb_headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
-def insert_supabase(hotel: dict) -> dict:
-    import urllib.request
-    url  = f"{SUPABASE_URL}/rest/v1/hotels"
-    data = json.dumps(hotel).encode()
-    req  = urllib.request.Request(url, data=data, headers=_sb_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
+def insert_hotel(hotel: dict) -> dict:
+    cols = list(hotel.keys())
+    placeholders = ", ".join(f"%({c})s" for c in cols)
+    col_list = ", ".join(cols)
+    sql = f"INSERT INTO hotels ({col_list}) VALUES ({placeholders}) RETURNING *"
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, hotel)
+            conn.commit()
+            return dict(cur.fetchone())
 
 
 def index_elasticsearch(hotel: dict) -> None:
@@ -56,10 +57,10 @@ def embed_faqs(hotel_id: str, faqs: list[dict]) -> None:
 def onboard(hotel_data: dict) -> None:
     print(f"\nOnboarding hotel: {hotel_data.get('name', '?')}")
 
-    # 1. Supabase
-    record = insert_supabase({k: v for k, v in hotel_data.items() if k != "faqs"})
+    # 1. Database (PostgreSQL via DATABASE_URL)
+    record = insert_hotel({k: v for k, v in hotel_data.items() if k != "faqs"})
     hotel_id = record.get("id")
-    print(f"  ✓ Supabase inserted hotel id={hotel_id}")
+    print(f"  ✓ DB inserted hotel id={hotel_id}")
 
     # 2. Elasticsearch
     index_elasticsearch({**hotel_data, "id": hotel_id})

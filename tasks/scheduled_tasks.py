@@ -5,26 +5,24 @@ Celery beat-scheduled maintenance tasks.
 """
 
 import os
-import json
 import logging
 from datetime import datetime, timezone, timedelta
-import urllib.request
 
 from .celery_app import celery_app
 
 log = logging.getLogger(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-REDIS_URL    = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+REDIS_URL    = os.environ.get("REDIS_URL", "")
 
 
-def _sb_headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-    }
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 @celery_app.task(name="tasks.scheduled_tasks.trigger_review_requests")
@@ -33,13 +31,13 @@ def trigger_review_requests():
     Finds bookings that checked out yesterday and enqueues review requests.
     """
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    url = (
-        f"{SUPABASE_URL}/rest/v1/bookings"
-        f"?check_out=eq.{yesterday}&status=eq.confirmed&select=id"
-    )
-    req = urllib.request.Request(url, headers=_sb_headers())
-    with urllib.request.urlopen(req) as resp:
-        bookings = json.loads(resp.read())
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM bookings WHERE check_out = %s AND status = 'confirmed'",
+                (yesterday,),
+            )
+            bookings = [dict(r) for r in cur.fetchall()]
 
     queued = 0
     for b in bookings:
@@ -59,18 +57,18 @@ def expire_loyalty_points():
     Marks loyalty_transactions expired where expires_at < now.
     (Points deduction handled by a Supabase function / trigger in production.)
     """
-    now = datetime.now(timezone.utc).isoformat()
-    url = (
-        f"{SUPABASE_URL}/rest/v1/loyalty_transactions"
-        f"?expires_at=lt.{now}&expired=eq.false"
-    )
-    headers = {**_sb_headers(), "Prefer": "return=representation"}
-    data    = json.dumps({"expired": True}).encode()
-    req     = urllib.request.Request(url, data=data, headers=headers, method="PATCH")
-    with urllib.request.urlopen(req) as resp:
-        updated = json.loads(resp.read())
-    log.info("Expired %d loyalty point records", len(updated))
-    return {"expired": len(updated)}
+    now = datetime.now(timezone.utc)
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE loyalty_transactions SET expired = TRUE "
+                "WHERE expires_at < %s AND expired = FALSE",
+                (now,),
+            )
+            updated_count = cur.rowcount
+            conn.commit()
+    log.info("Expired %d loyalty point records", updated_count)
+    return {"expired": updated_count}
 
 
 @celery_app.task(name="tasks.scheduled_tasks.release_stale_soft_locks")
@@ -81,6 +79,9 @@ def release_stale_soft_locks():
     Iterates soft_lock:* keys older than LOCK_TTL without matching session.
     """
     import redis as redis_lib
+    if not REDIS_URL:
+        log.warning("REDIS_URL not set; skipping stale lock cleanup")
+        return {"released": 0}
     r = redis_lib.from_url(REDIS_URL, decode_responses=True)
     pattern  = "soft_lock:*"
     cursor   = 0

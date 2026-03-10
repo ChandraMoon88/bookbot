@@ -7,40 +7,21 @@ with a pickup deadline and optional deposit schedule.
 """
 
 import os
-import json
 import logging
 from datetime import datetime, timezone
-import urllib.request
 
 log = logging.getLogger(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
-def _headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
-
-
-def _post(table: str, payload: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/{table}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
-
-
-def _get(path: str) -> list:
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def create_block(
@@ -54,46 +35,49 @@ def create_block(
     rate_per_night:  float,
     organiser_email: str,
 ) -> dict:
-    block = _post("room_blocks", {
-        "hotel_id":        hotel_id,
-        "room_type_id":    room_type_id,
-        "rooms_reserved":  rooms_reserved,
-        "rooms_picked_up": 0,
-        "date_from":       date_from,
-        "date_to":         date_to,
-        "group_name":      group_name,
-        "pickup_deadline": pickup_deadline,
-        "rate_per_night":  rate_per_night,
-        "organiser_email": organiser_email,
-        "status":          "active",
-        "created_at":      datetime.now(timezone.utc).isoformat(),
-    })
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO room_blocks "
+                "(hotel_id, room_type_id, rooms_reserved, rooms_picked_up, date_from, date_to, "
+                " group_name, pickup_deadline, rate_per_night, organiser_email, status, created_at) "
+                "VALUES (%s,%s,%s,0,%s,%s,%s,%s,%s,%s,'active',%s) RETURNING *",
+                (hotel_id, room_type_id, rooms_reserved, date_from, date_to,
+                 group_name, pickup_deadline, rate_per_night, organiser_email,
+                 datetime.now(timezone.utc)),
+            )
+            block = dict(cur.fetchone())
+            conn.commit()
     log.info("Room block created: %s (%d rooms)", group_name, rooms_reserved)
     return block
 
 
 def pickup_room(block_id: str, booking_id: str) -> dict:
     """Marks one room from the block as picked up."""
-    blocks = _get(f"room_blocks?id=eq.{block_id}")
-    if not blocks:
-        raise ValueError(f"Block {block_id} not found")
-    block = blocks[0]
-    if block["rooms_picked_up"] >= block["rooms_reserved"]:
-        raise ValueError("All rooms already picked up")
-
-    url  = f"{SUPABASE_URL}/rest/v1/room_blocks?id=eq.{block_id}"
-    data = json.dumps({
-        "rooms_picked_up": block["rooms_picked_up"] + 1,
-        "updated_at":       datetime.now(timezone.utc).isoformat(),
-    }).encode()
-    req = urllib.request.Request(url, data=data, headers=_headers(), method="PATCH")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM room_blocks WHERE id = %s FOR UPDATE", (block_id,))
+            block = cur.fetchone()
+            if not block:
+                raise ValueError(f"Block {block_id} not found")
+            block = dict(block)
+            if block["rooms_picked_up"] >= block["rooms_reserved"]:
+                raise ValueError("All rooms already picked up")
+            cur.execute(
+                "UPDATE room_blocks SET rooms_picked_up = rooms_picked_up + 1, "
+                "updated_at = %s WHERE id = %s RETURNING *",
+                (datetime.now(timezone.utc), block_id),
+            )
+            result = dict(cur.fetchone())
+            conn.commit()
+    return result
 
 
 def get_block(block_id: str) -> dict:
-    rows = _get(f"room_blocks?id=eq.{block_id}")
-    if not rows:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM room_blocks WHERE id = %s", (block_id,))
+            row = cur.fetchone()
+    if not row:
         raise ValueError(f"Block {block_id} not found")
-    return rows[0]
+    return dict(row)

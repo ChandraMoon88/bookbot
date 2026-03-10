@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Secure Payment</title>
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f8f9fa;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+    .logo {
+      text-align: center;
+      font-size: 1.8rem;
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.1rem;
+      color: #1a1a2e;
+      margin-bottom: 0.25rem;
+    }
+    .amount {
+      text-align: center;
+      font-size: 2rem;
+      font-weight: 700;
+      color: #0066cc;
+      margin-bottom: 1.5rem;
+    }
+    .secure-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      color: #6c757d;
+      margin-bottom: 1rem;
+    }
+    #payment-element {
+      margin-bottom: 1.25rem;
+    }
+    #submit-btn {
+      width: 100%;
+      padding: 0.9rem;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #submit-btn:disabled {
+      background: #adb5bd;
+      cursor: not-allowed;
+    }
+    #submit-btn:hover:not(:disabled) { background: #0052a3; }
+    #error-msg {
+      color: #dc3545;
+      font-size: 0.875rem;
+      margin-top: 0.75rem;
+      text-align: center;
+      display: none;
+    }
+    .success-screen {
+      text-align: center;
+      display: none;
+    }
+    .success-screen .check {
+      font-size: 4rem;
+      margin-bottom: 0.5rem;
+    }
+    .success-screen h2 { color: #28a745; font-size: 1.3rem; }
+    .success-screen p { color: #6c757d; font-size: 0.9rem; margin-top: 0.5rem; }
+    .powered-by {
+      text-align: center;
+      margin-top: 1rem;
+      font-size: 0.7rem;
+      color: #adb5bd;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="payment-screen">
+      <div class="logo">🏨</div>
+      <h1>Complete your booking</h1>
+      <div class="amount" id="amount-display">Loading…</div>
+
+      <div class="secure-badge">
+        🔒 256-bit SSL encrypted · Powered by Stripe
+      </div>
+
+      <form id="payment-form">
+        <div id="payment-element"></div>
+        <div id="error-msg"></div>
+        <button id="submit-btn" disabled>Loading…</button>
+      </form>
+    </div>
+
+    <div class="success-screen" id="success-screen">
+      <div class="check">✅</div>
+      <h2>Payment Successful!</h2>
+      <p>Your booking is confirmed. You can now close this window and return to Messenger to see your confirmation.</p>
+    </div>
+
+    <div class="powered-by">Secured by Stripe · Hotel Booking AI</div>
+  </div>
+
+  <script>
+    // Injected server-side by FastAPI
+    const STRIPE_PK     = "{{STRIPE_PUBLISHABLE_KEY}}";
+    const CLIENT_SECRET = "{{CLIENT_SECRET}}";
+    const AMOUNT        = "{{AMOUNT}}";
+    const CURRENCY      = "{{CURRENCY}}";
+    const RETURN_URL    = "{{RETURN_URL}}";
+
+    // Display amount
+    document.getElementById("amount-display").textContent =
+      parseFloat(AMOUNT).toLocaleString("en-US", { style: "currency", currency: CURRENCY });
+
+    const stripe = Stripe(STRIPE_PK);
+
+    const appearance = {
+      theme: "stripe",
+      variables: { colorPrimary: "#0066cc", borderRadius: "8px" },
+    };
+
+    const elements = stripe.elements({ clientSecret: CLIENT_SECRET, appearance });
+    const paymentElement = elements.create("payment");
+    paymentElement.mount("#payment-element");
+
+    paymentElement.on("ready", () => {
+      const btn = document.getElementById("submit-btn");
+      btn.disabled = false;
+      btn.textContent = `Pay ${parseFloat(AMOUNT).toLocaleString("en-US", { style: "currency", currency: CURRENCY })}`;
+    });
+
+    document.getElementById("payment-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("submit-btn");
+      const errEl = document.getElementById("error-msg");
+      btn.disabled = true;
+      btn.textContent = "Processing…";
+      errEl.style.display = "none";
+
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: { return_url: RETURN_URL },
+        redirect: "if_required",
+      });
+
+      if (error) {
+        errEl.textContent = error.message || "Payment failed. Please try again.";
+        errEl.style.display = "block";
+        btn.disabled = false;
+        btn.textContent = `Pay ${parseFloat(AMOUNT).toLocaleString("en-US", { style: "currency", currency: CURRENCY })}`;
+      } else {
+        // Payment succeeded without redirect
+        document.getElementById("payment-screen").style.display = "none";
+        document.getElementById("success-screen").style.display = "block";
+        // Notify parent Messenger window
+        if (window.MessengerExtensions) {
+          setTimeout(() => window.MessengerExtensions.requestCloseBrowser(null, null), 3000);
+        }
+      }
+    });
+  </script>
+</body>
+</html>

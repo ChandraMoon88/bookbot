@@ -9,60 +9,24 @@ Expiry        : Points expire after 365 days (handled by scheduled task)
 """
 
 import os
-import json
 import logging
 from datetime import datetime, timezone, timedelta
 
-import urllib.request
-
 log = logging.getLogger(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 POINTS_PER_USD    = 10
 POINTS_PER_DOLLAR = 100   # redemption rate
 
 
-def _headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
-
-
-def _rpc(fn: str, args: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/rpc/{fn}"
-    data = json.dumps(args).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-
-
-def _get(path: str) -> list:
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-
-
-def _patch(path: str, payload: dict) -> list:
-    url  = f"{SUPABASE_URL}/rest/v1/{path}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="PATCH")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-
-
-def _insert(table: str, payload: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/{table}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def award(guest_id: str, amount_usd: float, booking_id: str) -> dict:
@@ -71,30 +35,25 @@ def award(guest_id: str, amount_usd: float, booking_id: str) -> dict:
     if points_earned <= 0:
         return {"awarded": 0}
 
-    # Upsert loyalty_accounts
-    rows = _get(f"loyalty_accounts?guest_id=eq.{guest_id}")
-    expires = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
-
-    if rows:
-        acc    = rows[0]
-        new_pts = acc["points_balance"] + points_earned
-        _patch(f"loyalty_accounts?guest_id=eq.{guest_id}", {"points_balance": new_pts})
-    else:
-        _insert("loyalty_accounts", {
-            "guest_id":       guest_id,
-            "points_balance": points_earned,
-            "tier":           "bronze",
-        })
-
-    # Record transaction
-    _insert("loyalty_transactions", {
-        "guest_id":    guest_id,
-        "booking_id":  booking_id,
-        "points":      points_earned,
-        "type":        "earn",
-        "expires_at":  expires,
-        "created_at":  datetime.now(timezone.utc).isoformat(),
-    })
+    expires = datetime.now(timezone.utc) + timedelta(days=365)
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            # Upsert loyalty_accounts
+            cur.execute(
+                "INSERT INTO loyalty_accounts (guest_id, points_balance, tier) "
+                "VALUES (%s, %s, 'bronze') "
+                "ON CONFLICT (guest_id) DO UPDATE "
+                "SET points_balance = loyalty_accounts.points_balance + EXCLUDED.points_balance",
+                (guest_id, points_earned),
+            )
+            # Record transaction
+            cur.execute(
+                "INSERT INTO loyalty_transactions "
+                "(guest_id, booking_id, points, type, expires_at, created_at) "
+                "VALUES (%s,%s,%s,'earn',%s,%s)",
+                (guest_id, booking_id, points_earned, expires, datetime.now(timezone.utc)),
+            )
+            conn.commit()
 
     log.info("Awarded %d points to guest %s for booking %s", points_earned, guest_id, booking_id)
     return {"awarded": points_earned}
@@ -105,32 +64,41 @@ def redeem(guest_id: str, points_to_redeem: int, booking_id: str) -> dict:
     Redeems points for a discount.  Returns {discount_usd, remaining_balance}.
     Raises ValueError if insufficient balance.
     """
-    rows = _get(f"loyalty_accounts?guest_id=eq.{guest_id}")
-    if not rows or rows[0]["points_balance"] < points_to_redeem:
-        raise ValueError("Insufficient loyalty points")
-
-    acc     = rows[0]
-    new_pts = acc["points_balance"] - points_to_redeem
-    discount_usd = round(points_to_redeem / POINTS_PER_DOLLAR, 2)
-
-    _patch(f"loyalty_accounts?guest_id=eq.{guest_id}", {"points_balance": new_pts})
-
-    _insert("loyalty_transactions", {
-        "guest_id":    guest_id,
-        "booking_id":  booking_id,
-        "points":      -points_to_redeem,
-        "type":        "redeem",
-        "created_at":  datetime.now(timezone.utc).isoformat(),
-    })
-
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT points_balance FROM loyalty_accounts WHERE guest_id=%s FOR UPDATE",
+                (guest_id,),
+            )
+            row = cur.fetchone()
+            if not row or row["points_balance"] < points_to_redeem:
+                raise ValueError("Insufficient loyalty points")
+            new_pts = row["points_balance"] - points_to_redeem
+            discount_usd = round(points_to_redeem / POINTS_PER_DOLLAR, 2)
+            cur.execute(
+                "UPDATE loyalty_accounts SET points_balance=%s WHERE guest_id=%s",
+                (new_pts, guest_id),
+            )
+            cur.execute(
+                "INSERT INTO loyalty_transactions "
+                "(guest_id, booking_id, points, type, created_at) VALUES (%s,%s,%s,'redeem',%s)",
+                (guest_id, booking_id, -points_to_redeem, datetime.now(timezone.utc)),
+            )
+            conn.commit()
     return {"discount_usd": discount_usd, "remaining_balance": new_pts}
 
 
 def get_balance(guest_id: str) -> dict:
-    rows = _get(f"loyalty_accounts?guest_id=eq.{guest_id}")
-    if not rows:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT points_balance, tier FROM loyalty_accounts WHERE guest_id=%s",
+                (guest_id,),
+            )
+            row = cur.fetchone()
+    if not row:
         return {"points_balance": 0, "tier": "bronze"}
-    acc = rows[0]
+    acc = dict(row)
     return {
         "points_balance": acc.get("points_balance", 0),
         "tier":           acc.get("tier", "bronze"),

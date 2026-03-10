@@ -11,8 +11,6 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-SUPABASE_URL    = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY    = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 PDF_BUCKET      = "booking-vouchers"
 
 
@@ -89,25 +87,5 @@ def generate_and_upload(booking: dict, hotel: dict, qr_bytes: Optional[bytes] = 
     ref       = booking.get("ref", "unknown")
     filename  = f"{ref}.pdf"
 
-    try:
-        import urllib.request
-        import json
-
-        url     = f"{SUPABASE_URL}/storage/v1/object/{PDF_BUCKET}/{filename}"
-        headers = {
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type":  "application/pdf",
-            "x-upsert":      "true",
-        }
-        req = urllib.request.Request(url, data=pdf_bytes, headers=headers, method="POST")
-        with urllib.request.urlopen(req) as resp:
-            resp.read()
-
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{PDF_BUCKET}/{filename}"
-        log.info("Voucher uploaded: %s", public_url)
-        return public_url
-
-    except Exception as exc:
-        log.warning("Supabase upload failed (%s) — returning bytes only", exc)
-        import base64
-        return "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()
+    import base64
+    return "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode()

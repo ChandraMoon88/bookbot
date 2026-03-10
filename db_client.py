@@ -1,473 +1,408 @@
 """
 db_client.py
 ------------
-All Supabase REST API calls for BookBot.
-Uses SUPABASE_URL + SUPABASE_KEY (service_role) — works on free tier, no IPv4 needed.
+Synchronous PostgreSQL client for BookBot processor.
+Uses psycopg2 with DATABASE_URL — no Supabase SDK needed.
 
-Tables used:
-  users        — register / lookup guest
-  hotels       — hotel info, amenities, photos
-  inventory    — room types, availability, rate_plans per date
-  bookings     — create / read / cancel bookings
-  sessions     — conversation state persistence
-  engagements  — ratings, feedback
-  v_available_rooms   — view: available rooms per hotel per date
-  v_booking_summary   — view: booking list for a user
+Tables used (see hotel_ai_supabase_schema.sql):
+  hotels, inventory, bookings, users
+
+All functions are SYNCHRONOUS — they run from the booking state
+machine in processor.py which is a regular (non-async) context.
+A new connection is opened and closed per call; Supabase's session-mode
+pooler (port 5432) handles true connection pooling.
 """
 
-from __future__ import annotations
-import os
 import json
-import urllib.request
-import urllib.error
-import urllib.parse
 import logging
-from datetime import datetime, date, timedelta
-from typing import Any
+import os
+import random
+import re
+import string
+from datetime import datetime, date
+from typing import Optional
+
+import psycopg2
+import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+# ── Sentence-transformers (optional — graceful degradation) ───────────────────
+try:
+    from sentence_transformers import SentenceTransformer, util as st_util
+    _sem_model: Optional[SentenceTransformer] = SentenceTransformer(
+        "all-MiniLM-L6-v2"
+    )
+    _SEM_AVAILABLE = True
+except Exception:
+    _sem_model = None
+    _SEM_AVAILABLE = False
 
 
-def _headers() -> dict:
-    return {
-        "apikey":          SUPABASE_KEY,
-        "Authorization":   f"Bearer {SUPABASE_KEY}",
-        "Content-Type":    "application/json",
-        "Prefer":          "return=representation",
-    }
+# ── Database connection ────────────────────────────────────────────────────────
+
+def _get_conn() -> psycopg2.extensions.connection:
+    """Open a new psycopg2 connection from DATABASE_URL."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL environment variable is not set")
+    # Supabase requires SSL — add sslmode if not already present
+    if "sslmode" not in url and "supabase.com" in url:
+        sep = "&" if "?" in url else "?"
+        url = url + sep + "sslmode=require"
+    conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn.autocommit = False
+    return conn
 
 
-def _get(endpoint: str, params: dict | list | None = None) -> list | dict:
-    """GET from Supabase REST API.
-    params can be a dict or a list of (key, value) tuples to allow
-    duplicate query-string keys (needed for range queries like date=gte.X&date=lt.Y).
+def _gen_booking_ref() -> str:
+    return "BB" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+
+# ── Hotel search ──────────────────────────────────────────────────────────────
+
+def search_hotels(
+    city: str,
+    checkin: str,
+    checkout: str,
+    num_adults: int = 1,
+    num_children: int = 0,
+) -> list:
     """
-    url = SUPABASE_URL + endpoint
-    if params:
-        if isinstance(params, dict):
-            url += "?" + urllib.parse.urlencode(params)
-        else:
-            url += "?" + urllib.parse.urlencode(params)  # list of tuples
-    req = urllib.request.Request(url, headers=_headers())
-    try:
-        r = urllib.request.urlopen(req, timeout=15)
-        return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        logger.error("GET %s → %s %s", endpoint, e.code, e.read().decode()[:200])
-        return []
-    except Exception as e:
-        logger.error("GET %s error: %s", endpoint, e)
-        return []
-
-
-def _post(endpoint: str, body: dict) -> dict | None:
-    url = SUPABASE_URL + endpoint
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    try:
-        r = urllib.request.urlopen(req, timeout=15)
-        result = json.loads(r.read().decode())
-        return result[0] if isinstance(result, list) and result else result
-    except urllib.error.HTTPError as e:
-        logger.error("POST %s → %s %s", endpoint, e.code, e.read().decode()[:200])
-        return None
-    except Exception as e:
-        logger.error("POST %s error: %s", endpoint, e)
-        return None
-
-
-def _patch(endpoint: str, body: dict, match: dict) -> dict | None:
-    params = urllib.parse.urlencode({k: f"eq.{v}" for k, v in match.items()})
-    url = SUPABASE_URL + endpoint + "?" + params
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers=_headers(), method="PATCH")
-    try:
-        r = urllib.request.urlopen(req, timeout=15)
-        result = json.loads(r.read().decode())
-        return result[0] if isinstance(result, list) and result else result
-    except urllib.error.HTTPError as e:
-        logger.error("PATCH %s → %s %s", endpoint, e.code, e.read().decode()[:200])
-        return None
-    except Exception as e:
-        logger.error("PATCH %s error: %s", endpoint, e)
-        return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HOTEL SEARCH
-# ─────────────────────────────────────────────────────────────────────────────
-
-def search_hotels(city: str, check_in: str, check_out: str,
-                  num_adults: int = 1, num_children: int = 0) -> list[dict]:
+    Return available hotels in *city* for the given date range/guest count.
+    Each hotel dict includes an 'available_rooms' key with per-room pricing.
     """
-    Search active hotels in a city that have available rooms for the dates.
-    Queries the inventory table directly (no view dependency).
-    Returns list of hotel dicts with available room types embedded.
-    """
-    # Step 1: find active hotels in the city
-    rows = _get("/rest/v1/hotels", {
-        "city":      f"ilike.{city}",
-        "is_active": "eq.true",
-        "select":    "id,name,description,city,country,star_rating,amenities,"
-                     "currency,check_in_time,check_out_time,thumbnail_url,photos",
-    })
-    if not rows:
+    try:
+        ci = datetime.strptime(checkin, "%Y-%m-%d").date()
+        co = datetime.strptime(checkout, "%Y-%m-%d").date()
+    except ValueError:
         return []
 
+    nights = (co - ci).days
+    if nights <= 0:
+        return []
+
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                # 1. Active hotels in city
+                cur.execute(
+                    """
+                    SELECT id, name, description, city, country,
+                           star_rating, amenities, currency,
+                           check_in_time, check_out_time, thumbnail_url
+                    FROM   hotels
+                    WHERE  is_active = TRUE
+                      AND  LOWER(city) = LOWER(%s)
+                    LIMIT  20
+                    """,
+                    (city,),
+                )
+                hotels = [dict(r) for r in cur.fetchall()]
+                if not hotels:
+                    return []
+
+                hotel_ids = [str(h["id"]) for h in hotels]
+                ph = ",".join(["%s"] * len(hotel_ids))
+
+                # 2. Aggregate inventory for the date range
+                cur.execute(
+                    f"""
+                    SELECT
+                        hotel_id::text,
+                        room_type_code,
+                        room_type_name,
+                        MIN(available_count)                     AS min_avail,
+                        MAX(max_adults)                          AS max_adults,
+                        MAX(max_children)                        AS max_children,
+                        (array_agg(rate_plans ORDER BY date))[1] AS rate_plans
+                    FROM   inventory
+                    WHERE  hotel_id::text IN ({ph})
+                      AND  date >= %s
+                      AND  date <  %s
+                      AND  available_count > 0
+                      AND  is_blackout = FALSE
+                    GROUP  BY hotel_id, room_type_code, room_type_name
+                    HAVING COUNT(*) >= %s
+                    """,
+                    hotel_ids + [ci, co, nights],
+                )
+                rooms_rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("search_hotels DB error: %s", e, exc_info=True)
+        return []
+
+    # Group rooms by hotel
+    rooms_by_hotel: dict[str, list] = {}
+    for row in rooms_rows:
+        row = dict(row)
+        hid = str(row["hotel_id"])
+
+        rate_plans = row.get("rate_plans") or {}
+        if isinstance(rate_plans, str):
+            try:
+                rate_plans = json.loads(rate_plans)
+            except Exception:
+                rate_plans = {}
+
+        # Cheapest per-night price across all meal plans
+        prices = []
+        for plan_data in rate_plans.values():
+            if isinstance(plan_data, dict):
+                p = plan_data.get("price_per_night")
+                if p:
+                    try:
+                        prices.append(float(p))
+                    except (TypeError, ValueError):
+                        pass
+
+        rooms_by_hotel.setdefault(hid, []).append({
+            "room_type_code":  row["room_type_code"],
+            "room_type_name":  row["room_type_name"],
+            "available_count": int(row.get("min_avail") or 0),
+            "max_adults":      int(row.get("max_adults") or 2),
+            "max_children":    int(row.get("max_children") or 0),
+            "price_per_night": min(prices) if prices else None,
+            "rate_plans":      rate_plans,
+        })
+
+    # Attach rooms to hotels; filter by capacity
     results = []
-    for hotel in rows:
-        hotel_id = hotel["id"]
-        nights   = _nights(check_in, check_out)
-
-        # Query inventory with a date range using list-of-tuples for duplicate keys
-        avail_rows = _get("/rest/v1/inventory", [
-            ("hotel_id",        f"eq.{hotel_id}"),
-            ("date",            f"gte.{check_in}"),
-            ("date",            f"lt.{check_out}"),
-            ("available_count", "gt.0"),
-            ("is_blackout",     "eq.false"),
-            ("select",          "room_type_code,room_type_name,date,"
-                                "available_count,max_adults,max_children,rate_plans"),
-        ])
-        if not avail_rows:
-            continue
-
-        # Build expected date set for the stay
-        all_dates: set[str] = set()
-        d = datetime.strptime(check_in, "%Y-%m-%d").date()
-        end_d = datetime.strptime(check_out, "%Y-%m-%d").date()
-        while d < end_d:
-            all_dates.add(str(d))
-            d += timedelta(days=1)
-
-        # Count how many nights each room type appears as available
-        from collections import defaultdict
-        date_per_room: dict[str, set] = defaultdict(set)
-        room_info: dict[str, dict] = {}
-        for row in avail_rows:
-            dt  = row["date"][:10]
-            rtc = row["room_type_code"]
-            date_per_room[rtc].add(dt)
-            if rtc not in room_info:
-                room_info[rtc] = row
-
-        available_rooms = []
-        for rtc, info in room_info.items():
-            # Room must be available every night of the stay
-            if not all_dates.issubset(date_per_room[rtc]):
-                continue
-            rate_plans = info.get("rate_plans") or {}
-            if isinstance(rate_plans, str):
-                try:
-                    rate_plans = json.loads(rate_plans)
-                except Exception:
-                    rate_plans = {}
-            price_per_night = _cheapest_rate(rate_plans)
-            available_rooms.append({
-                "room_type_code":  rtc,
-                "room_type_name":  info.get("room_type_name", rtc),
-                "max_adults":      info.get("max_adults", 2),
-                "max_children":    info.get("max_children", 0),
-                "price_per_night": price_per_night,
-                "total_price":     price_per_night * nights if price_per_night else None,
-                "rate_plans":      rate_plans,
-            })
-
-        if not available_rooms:
-            continue
-
-        # Prefer rooms that fit the guest count; fall back to showing all
-        fitting = [
-            r for r in available_rooms
-            if r["max_adults"] >= num_adults and r["max_children"] >= num_children
+    for h in hotels:
+        hid   = str(h["id"])
+        rooms = rooms_by_hotel.get(hid, [])
+        eligible = [
+            r for r in rooms
+            if r["max_adults"] >= num_adults
+            and (num_children == 0 or r["max_children"] >= num_children)
+            and r["available_count"] > 0
         ]
-        if not fitting:
-            fitting = available_rooms
-
-        results.append({**hotel, "available_rooms": fitting, "nights": nights})
+        if eligible:
+            if isinstance(h.get("amenities"), str):
+                try:
+                    h["amenities"] = json.loads(h["amenities"])
+                except Exception:
+                    h["amenities"] = []
+            h["available_rooms"] = eligible
+            results.append(h)
 
     return results
 
 
-def _nights(check_in: str, check_out: str) -> int:
+def semantic_hotel_search(query: str, hotels: list, top_k: int = 5) -> list:
+    """Rerank hotel list by semantic similarity. Falls back to original order."""
+    if not _SEM_AVAILABLE or not hotels or _sem_model is None:
+        return hotels[:top_k]
     try:
-        d1 = datetime.strptime(check_in, "%Y-%m-%d").date()
-        d2 = datetime.strptime(check_out, "%Y-%m-%d").date()
-        return max((d2 - d1).days, 1)
-    except Exception:
-        return 1
-
-
-def _cheapest_rate(rate_plans: dict) -> float | None:
-    """Return the minimum price from rate_plans JSON."""
-    if not rate_plans:
-        return None
-    prices = []
-    # rate_plans may be {plan_code: {price_per_night: X}} or [{price: X}] etc.
-    if isinstance(rate_plans, dict):
-        for v in rate_plans.values():
-            if isinstance(v, dict):
-                for key in ("price_per_night", "price", "rate", "amount"):
-                    if key in v and v[key]:
-                        try:
-                            prices.append(float(v[key]))
-                        except Exception:
-                            pass
-    elif isinstance(rate_plans, list):
-        for v in rate_plans:
-            if isinstance(v, dict):
-                for key in ("price_per_night", "price", "rate", "amount"):
-                    if key in v and v[key]:
-                        try:
-                            prices.append(float(v[key]))
-                        except Exception:
-                            pass
-    return min(prices) if prices else None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SEMANTIC HOTEL SEARCH  (HuggingFace sentence-transformers, CPU-safe)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_embed_model = None
-
-def _get_embed_model():
-    global _embed_model
-    if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        _embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    return _embed_model
-
-
-def semantic_hotel_search(query: str, hotels: list[dict], top_k: int = 5) -> list[dict]:
-    """
-    Re-rank a list of hotels using cosine similarity between the user's query
-    and a text representation of each hotel (name + description + amenities).
-    Falls back to the original list if embeddings not available.
-    """
-    if not hotels:
-        return hotels
-    try:
-        model = _get_embed_model()
-        import numpy as np
-
-        # Build hotel text corpus
-        def _hotel_text(h: dict) -> str:
-            amenities = h.get("amenities") or []
-            if isinstance(amenities, str):
-                try:
-                    amenities = json.loads(amenities)
-                except Exception:
-                    amenities = [amenities]
-            return (
-                f"{h.get('name', '')} in {h.get('city', '')}. "
-                f"{h.get('description', '')}. "
-                f"Amenities: {', '.join(str(a) for a in amenities)}. "
-                f"{h.get('star_rating', '')} stars."
-            )
-
-        corpus   = [_hotel_text(h) for h in hotels]
-        q_emb    = model.encode([query], normalize_embeddings=True)
-        c_embs   = model.encode(corpus,  normalize_embeddings=True)
-        scores   = (c_embs @ q_emb.T).flatten()
-        ranked   = sorted(zip(scores, hotels), key=lambda x: x[0], reverse=True)
+        texts = [
+            f"{h.get('name', '')} {h.get('description', '')} {h.get('city', '')} "
+            + " ".join(str(a) for a in (h.get("amenities") or [])[:5])
+            for h in hotels
+        ]
+        q_emb  = _sem_model.encode(query, convert_to_tensor=True)
+        t_emb  = _sem_model.encode(texts,  convert_to_tensor=True)
+        scores = st_util.cos_sim(q_emb, t_emb)[0].tolist()
+        ranked = sorted(zip(scores, hotels), key=lambda x: x[0], reverse=True)
         return [h for _, h in ranked[:top_k]]
     except Exception as e:
-        logger.warning("Semantic search failed (%s), using original order.", e)
+        logger.error("semantic_hotel_search error: %s", e)
         return hotels[:top_k]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# USERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ── User management ───────────────────────────────────────────────────────────
 
-def get_or_create_user(messenger_id: str, first_name: str = "",
-                       last_name: str = "", lang: str = "en") -> dict | None:
+def get_or_create_user(
+    messenger_id: str, first_name: str = ""
+) -> Optional[dict]:
     """
-    Look up user by Messenger platform ID stored in the phone field
-    as 'messenger:{messenger_id}'. This avoids unreliable JSONB filtering.
-    Creates a new user record if not found.
+    Get or create a user record.
+    Uses phone = "messenger:{messenger_id}" as the unique identifier.
     """
     phone_key = f"messenger:{messenger_id}"
-    rows = _get("/rest/v1/users", {
-        "phone":  f"eq.{phone_key}",
-        "select": "id,first_name,last_name,preferred_language,loyalty_tier,"
-                  "loyalty_points_available",
-    })
-    if rows:
-        return rows[0]
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM users WHERE phone = %s LIMIT 1",
+                    (phone_key,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
 
-    # Create new user
-    return _post("/rest/v1/users", {
-        "first_name":         first_name or "Guest",
-        "last_name":          last_name  or "",
-        "preferred_language": lang,
-        "phone":              phone_key,
-        "oauth_accounts":     [{"provider": "messenger", "provider_user_id": messenger_id}],
-        "is_active":          True,
-        "loyalty_tier":       "bronze",
-        "loyalty_points_available": 0,
-        "loyalty_points_total":     0,
-    })
+                cur.execute(
+                    """
+                    INSERT INTO users (first_name, phone)
+                    VALUES (%s, %s)
+                    RETURNING *
+                    """,
+                    (first_name or "Guest", phone_key),
+                )
+                new_row = cur.fetchone()
+                conn.commit()
+                return dict(new_row) if new_row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("get_or_create_user error: %s", e)
+        return None
 
 
-def get_user_bookings(user_id: str) -> list[dict]:
-    """Fetch user's recent bookings. Tries the view first, then falls back
-    to a direct bookings + hotels query if the view does not exist."""
-    rows = _get("/rest/v1/v_booking_summary", {
-        "user_id": f"eq.{user_id}",
-        "order":   "created_at.desc",
-        "limit":   "5",
-        "select":  "booking_reference,hotel_name,city,country,room_type_code,"
-                   "check_in,check_out,num_adults,total_amount,currency,"
-                   "status,payment_status,primary_guest_name",
-    })
-    if rows:  # view exists and returned data
-        return rows
+# ── Booking operations ────────────────────────────────────────────────────────
 
-    # Fallback: query bookings table directly and enrich with hotel details
-    bookings = _get("/rest/v1/bookings", {
-        "user_id": f"eq.{user_id}",
-        "order":   "created_at.desc",
-        "limit":   "5",
-        "select":  "booking_reference,hotel_id,room_type_code,check_in,check_out,"
-                   "num_adults,num_children,total_amount,currency,status,"
-                   "payment_status,primary_guest_name",
-    })
-    if not bookings:
+def get_user_bookings(user_id: str) -> list:
+    """Return the 10 most-recent bookings for a user (joined with hotel name)."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT b.*, h.name AS hotel_name
+                    FROM   bookings b
+                    LEFT   JOIN hotels h ON b.hotel_id = h.id
+                    WHERE  b.user_id = %s::uuid
+                    ORDER  BY b.created_at DESC
+                    LIMIT  10
+                    """,
+                    (user_id,),
+                )
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("get_user_bookings error: %s", e)
         return []
 
-    # Fetch hotel names in bulk
-    hotel_ids = list({b["hotel_id"] for b in bookings if b.get("hotel_id")})
-    hotel_map: dict[str, dict] = {}
-    for hid in hotel_ids:
-        h = _get("/rest/v1/hotels", {"id": f"eq.{hid}", "select": "id,name,city,country"})
-        if h:
-            hotel_map[hid] = h[0]
 
-    for b in bookings:
-        hd = hotel_map.get(b.get("hotel_id", ""), {})
-        b["hotel_name"] = hd.get("name", "Hotel")
-        b["city"]       = hd.get("city", "")
-        b["country"]    = hd.get("country", "")
-    return bookings
+def create_booking(
+    user_id: str,
+    hotel_id: str,
+    room_type_code: str,
+    check_in: str,
+    check_out: str,
+    num_adults: int = 1,
+    num_children: int = 0,
+    primary_guest_name: str = "",
+    primary_guest_email: str = "",
+    primary_guest_phone: str = "",
+    total_amount: float = 0.0,
+    currency: str = "INR",
+    special_requests: str = "",
+    rate_plan: str = "room_only",
+    meal_plan: str = "room_only",
+    num_rooms: int = 1,
+) -> Optional[dict]:
+    """Insert a new booking row. Returns the inserted dict (with booking_reference)."""
+    booking_ref = _gen_booking_ref()
+    # Tax calculation (18% GST inclusive)
+    tax_rate    = 0.18
+    base_amount = round(float(total_amount) / (1 + tax_rate), 2)
+    tax_amount  = round(float(total_amount) - base_amount, 2)
 
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Ensure unique reference
+                for _ in range(5):
+                    cur.execute(
+                        "SELECT 1 FROM bookings WHERE booking_reference = %s",
+                        (booking_ref,),
+                    )
+                    if not cur.fetchone():
+                        break
+                    booking_ref = _gen_booking_ref()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BOOKINGS
-# ─────────────────────────────────────────────────────────────────────────────
+                uid = user_id  if user_id  else None
+                hid = hotel_id if hotel_id else None
 
-def create_booking(user_id: str, hotel_id: str, room_type_code: str,
-                   check_in: str, check_out: str, num_adults: int,
-                   num_children: int, primary_guest_name: str,
-                   primary_guest_email: str, primary_guest_phone: str,
-                   total_amount: float, currency: str,
-                   special_requests: str = "", rate_plan: str = "room_only",
-                   meal_plan: str = "room_only") -> dict | None:
-    import random, string
-    ref = "BB" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    # NOTE: 'nights' is a GENERATED ALWAYS AS column in the DB schema —
-    # do NOT pass it explicitly or PostgreSQL will raise an error.
-    return _post("/rest/v1/bookings", {
-        "booking_reference":    ref,
-        "user_id":              user_id,
-        "hotel_id":             hotel_id,
-        "room_type_code":       room_type_code,
-        "rate_plan":            rate_plan,
-        "meal_plan":            meal_plan,
-        "check_in":             check_in,
-        "check_out":            check_out,
-        "num_adults":           num_adults,
-        "num_children":         num_children,
-        "num_rooms":            1,
-        "primary_guest_name":   primary_guest_name,
-        "primary_guest_email":  primary_guest_email,
-        "primary_guest_phone":  primary_guest_phone or "",
-        "total_amount":         total_amount,
-        "base_amount":          total_amount,
-        "tax_amount":           0,
-        "currency":             currency,
-        "special_requests":     special_requests,
-        "status":               "confirmed",
-        "payment_status":       "pending",
-    })
-
-
-def cancel_booking(booking_reference: str, reason: str = "guest_request") -> bool:
-    result = _patch(
-        "/rest/v1/bookings",
-        {"status": "cancelled", "cancellation_reason": reason,
-         "cancelled_at": datetime.utcnow().isoformat()},
-        {"booking_reference": booking_reference}
-    )
-    return result is not None
-
-
-def get_booking_by_ref(ref: str) -> dict | None:
-    """Fetch booking details by reference. Tries view first, falls back to direct query."""
-    rows = _get("/rest/v1/v_booking_summary", {
-        "booking_reference": f"eq.{ref}",
-        "select": "*",
-    })
-    if rows:
-        return rows[0]
-    # Fallback — direct query on bookings table
-    rows = _get("/rest/v1/bookings", {
-        "booking_reference": f"eq.{ref}",
-        "select": "booking_reference,hotel_id,room_type_code,check_in,check_out,"
-                  "num_adults,num_children,total_amount,currency,status,"
-                  "payment_status,primary_guest_name,primary_guest_email,"
-                  "cancellation_reason",
-    })
-    if not rows:
+                cur.execute(
+                    """
+                    INSERT INTO bookings (
+                        booking_reference, user_id, hotel_id, room_type_code,
+                        rate_plan, meal_plan, check_in, check_out,
+                        num_adults, num_children, num_rooms,
+                        primary_guest_name, primary_guest_email, primary_guest_phone,
+                        total_amount, base_amount, tax_amount, currency,
+                        special_requests, status, payment_status
+                    ) VALUES (
+                        %s, %s::uuid, %s::uuid, %s,
+                        %s, %s, %s::date, %s::date,
+                        %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, 'confirmed', 'pending'
+                    ) RETURNING *
+                    """,
+                    (
+                        booking_ref, uid, hid, room_type_code,
+                        rate_plan, meal_plan, check_in, check_out,
+                        num_adults, num_children, num_rooms,
+                        primary_guest_name, primary_guest_email, primary_guest_phone,
+                        total_amount, base_amount, tax_amount, currency,
+                        special_requests,
+                    ),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row) if row else {"booking_reference": booking_ref}
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("create_booking error: %s", e, exc_info=True)
         return None
-    b = rows[0]
-    # Enrich with hotel name
-    if b.get("hotel_id"):
-        h = _get("/rest/v1/hotels", {"id": f"eq.{b['hotel_id']}",
-                                     "select": "id,name,city,country"})
-        if h:
-            b["hotel_name"] = h[0].get("name", "Hotel")
-            b["city"]       = h[0].get("city", "")
-            b["country"]    = h[0].get("country", "")
-    return b
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SESSIONS (conversation persistence)
-# ─────────────────────────────────────────────────────────────────────────────
+def cancel_booking(booking_id: str) -> bool:
+    """Cancel a booking by ID. Returns True on success."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE bookings
+                    SET    status       = 'cancelled',
+                           cancelled_at = NOW(),
+                           updated_at   = NOW()
+                    WHERE  id = %s::uuid
+                    """,
+                    (booking_id,),
+                )
+                conn.commit()
+                return cur.rowcount > 0
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("cancel_booking error: %s", e)
+        return False
 
-def get_hotel_details(hotel_id: str) -> dict | None:
-    """Fetch full hotel record by ID."""
-    rows = _get("/rest/v1/hotels", {
-        "id":     f"eq.{hotel_id}",
-        "select": "id,name,description,city,country,star_rating,amenities,"
-                  "currency,check_in_time,check_out_time,policy,photos,thumbnail_url",
-    })
-    return rows[0] if rows else None
 
-
-def upsert_session(session_key: str, user_id: str | None,
-                   lang: str, turn_count: int, last_intent: str,
-                   messages_snapshot: list) -> None:
-    """Store/update conversation session for analytics & handoff."""
-    existing = _get("/rest/v1/sessions", {
-        "session_key": f"eq.{session_key}",
-        "select": "id",
-    })
-    body = {
-        "session_key":       session_key,
-        "user_id":           user_id,
-        "channel":           "messenger",
-        "detected_language": lang,
-        "total_turns":       turn_count,
-        "last_intent":       last_intent,
-        "messages":          messages_snapshot[-20:],  # keep last 20 turns
-    }
-    if existing:
-        _patch("/rest/v1/sessions", body, {"session_key": session_key})
-    else:
-        _post("/rest/v1/sessions", body)
+def get_booking_by_ref(booking_ref: str) -> Optional[dict]:
+    """Fetch a booking by its booking_reference (case-insensitive)."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT b.*, h.name AS hotel_name
+                    FROM   bookings b
+                    LEFT   JOIN hotels h ON b.hotel_id = h.id
+                    WHERE  UPPER(b.booking_reference) = UPPER(%s)
+                    LIMIT  1
+                    """,
+                    (booking_ref.upper(),),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("get_booking_by_ref error: %s", e)
+        return None

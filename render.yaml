@@ -6,8 +6,10 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: VERIFY_TOKEN
-        value: mybot123
+        sync: false          # Set in Render dashboard — must match FB webhook verify token
       - key: PAGE_ACCESS_TOKEN
-        value: EAAWVRMLpTZAUBQyFZAULnQT6IYHPuAEZBLKTYTrNwfUrPLSTavpnAHVhDlP6weUQpuwi6jXUwZAVCI9O1ZBF8axTI2wIKcHwyaiThXl74qyZCovEGOKuyiCcD6BnSe6ZAstYlkZAgXzc20B0kmO4D9fKY7FQEfuGxWS9HgNQ7oasz1QZB7C9ibtWzkT2THNpcS4iR728Ih0oTlQZDZD
+        sync: false          # Set in Render dashboard — Facebook Page Access Token
+      - key: APP_SECRET
+        sync: false          # Set in Render dashboard — Facebook App Secret (for HMAC verification)
       - key: HF_PROCESSOR_URL
         value: https://chandrashekar8-bookhotel.hf.space

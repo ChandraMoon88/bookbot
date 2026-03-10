@@ -10,8 +10,10 @@ a background task. Facebook never retries, no duplicate replies.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query, BackgroundTasks
+from fastapi import FastAPI, Request, Query, BackgroundTasks, HTTPException
 from fastapi.responses import PlainTextResponse
+import hashlib
+import hmac
 import httpx
 import os
 import json
@@ -76,6 +78,7 @@ app = FastAPI(lifespan=lifespan)
 VERIFY_TOKEN      = os.getenv("VERIFY_TOKEN", "mybot123")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 HF_PROCESSOR_URL  = os.getenv("HF_PROCESSOR_URL", "").rstrip("/")
+APP_SECRET        = os.getenv("APP_SECRET")  # Facebook App Secret for HMAC verification
 
 print(f"TOKEN LOADED: {PAGE_ACCESS_TOKEN[:20] if PAGE_ACCESS_TOKEN else 'NOT FOUND!'}", flush=True)
 print(f"HF URL: {HF_PROCESSOR_URL}", flush=True)
@@ -133,7 +136,20 @@ async def verify_webhook(
 
 @app.post("/webhook")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
+    body = await request.body()
+
+    # Verify Facebook HMAC-SHA256 signature when APP_SECRET is configured.
+    # Protects against spoofed webhook calls from non-Facebook senders.
+    if APP_SECRET:
+        sig_header = request.headers.get("X-Hub-Signature-256", "")
+        expected   = "sha256=" + hmac.new(
+            APP_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            print(f"HMAC verification failed — sig={sig_header[:30]}", flush=True)
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    data = json.loads(body)
     print(f"Webhook received: {json.dumps(data)[:200]}", flush=True)
 
     if data.get("object") == "page":
@@ -245,7 +261,7 @@ async def handle_voice(sender_id: str, audio_url: str):
                 follow_redirects=True,
             )
         audio_b64 = base64.b64encode(resp.content).decode()
-        await call_processor_and_reply(sender_id, None, "voice", audio_b64)
+        await call_processor_and_reply(sender_id, "", "voice", audio_b64)
     except Exception as e:
         print(f"handle_voice error: {e}", flush=True)
         await send_text(sender_id, "Sorry, I could not process your voice message.")
@@ -253,9 +269,9 @@ async def handle_voice(sender_id: str, audio_url: str):
 
 async def call_processor_and_reply(
     sender_id: str,
-    message:   str,
+    message:   str | None,
     msg_type:  str,
-    audio_b64: str = None,
+    audio_b64: str | None = None,
 ):
     """Check HF Spaces is ready, call /process, send reply to Messenger."""
     try:

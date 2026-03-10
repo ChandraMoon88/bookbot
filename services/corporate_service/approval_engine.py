@@ -17,28 +17,30 @@ import urllib.request
 
 log = logging.getLogger(__name__)
 
-SUPABASE_URL        = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY        = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL        = os.environ.get("DATABASE_URL", "")
 APPROVAL_THRESHOLD  = float(os.environ.get("CORPORATE_APPROVAL_THRESHOLD_USD", "1000"))
-NOTIFY_URL          = os.environ.get("NOTIFICATION_SERVICE_URL", "http://localhost:8007")
+NOTIFY_URL          = os.environ.get("NOTIFICATION_SERVICE_URL", "")
 
 
-def _headers():
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
-def _post(table: str, payload: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/{table}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="POST")
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
-    return result[0] if isinstance(result, list) else result
+def _insert_approval(payload: dict) -> dict:
+    cols = list(payload.keys())
+    phs  = ", ".join(f"%({c})s" for c in cols)
+    sql  = f"INSERT INTO approval_requests ({', '.join(cols)}) VALUES ({phs}) RETURNING *"
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, payload)
+            result = dict(cur.fetchone())
+            conn.commit()
+    return result
 
 
 def evaluate(
@@ -55,13 +57,13 @@ def evaluate(
         return {"status": "approved", "approval_id": None,
                 "message": "Auto-approved (below threshold)"}
 
-    record = _post("approval_requests", {
+    record      = _insert_approval({
         "corporate_account_id": corporate_account_id,
         "booking_id":           booking_id,
         "amount_usd":           amount_usd,
         "approver_email":       approver_email,
         "status":               "pending",
-        "requested_at":         datetime.now(timezone.utc).isoformat(),
+        "requested_at":         datetime.now(timezone.utc),
     })
     approval_id = record.get("id")
 

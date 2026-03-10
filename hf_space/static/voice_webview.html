@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>Voice Input</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f8f9fa;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    h1 { font-size: 1.2rem; color: #1a1a2e; margin-bottom: 0.5rem; }
+    p  { font-size: 0.875rem; color: #6c757d; margin-bottom: 1.5rem; }
+
+    #record-btn {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: none;
+      background: #0066cc;
+      color: white;
+      font-size: 2rem;
+      cursor: pointer;
+      transition: transform 0.1s, background 0.2s;
+      box-shadow: 0 4px 12px rgba(0,102,204,0.4);
+    }
+    #record-btn.recording {
+      background: #dc3545;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 4px 12px rgba(220,53,69,0.4); }
+      50%       { box-shadow: 0 4px 24px rgba(220,53,69,0.7); }
+    }
+    #record-btn:disabled { background: #adb5bd; cursor: not-allowed; }
+
+    #status {
+      margin-top: 1rem;
+      font-size: 0.875rem;
+      color: #6c757d;
+      min-height: 1.4em;
+    }
+    #transcript-box {
+      margin-top: 1rem;
+      background: #f1f3f5;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.9rem;
+      color: #1a1a2e;
+      min-height: 60px;
+      display: none;
+      text-align: left;
+    }
+    #send-btn {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.75rem;
+      background: #28a745;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: none;
+    }
+    #send-btn:hover { background: #218838; }
+    .timer { font-size: 0.75rem; color: #6c757d; margin-top: 0.5rem; }
+    .language-select {
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      color: #6c757d;
+    }
+    select {
+      margin-top: 0.25rem;
+      padding: 0.3rem 0.5rem;
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎤 Voice Message</h1>
+    <p>Tap the microphone and speak your request. We'll convert it to text.</p>
+
+    <button id="record-btn" title="Hold to record">🎤</button>
+    <div id="timer" class="timer"></div>
+    <div id="status">Tap to start recording</div>
+    <div id="transcript-box"></div>
+    <button id="send-btn">Send message ➤</button>
+
+    <div class="language-select">
+      Language:
+      <select id="lang-select">
+        <option value="auto">Auto-detect</option>
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+        <option value="es">Español</option>
+        <option value="de">Deutsch</option>
+        <option value="ar">العربية</option>
+        <option value="zh">中文</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="pt">Português</option>
+        <option value="ru">Русский</option>
+        <option value="hi">हिन्दी</option>
+        <option value="th">ไทย</option>
+        <option value="id">Indonesia</option>
+      </select>
+    </div>
+  </div>
+
+  <script>
+    const HF_SPACE_URL = "{{HF_SPACE_URL}}";
+    const PSID         = "{{PSID}}";
+
+    let mediaRecorder = null;
+    let audioChunks   = [];
+    let timerInterval = null;
+    let seconds       = 0;
+    let transcript    = "";
+
+    const recordBtn    = document.getElementById("record-btn");
+    const statusEl     = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript-box");
+    const sendBtn      = document.getElementById("send-btn");
+    const timerEl      = document.getElementById("timer");
+    const langSelect   = document.getElementById("lang-select");
+
+    // Max 60s recording
+    const MAX_SECONDS = 60;
+
+    recordBtn.addEventListener("click", async () => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    });
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMimeType() });
+        audioChunks   = [];
+
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+        mediaRecorder.onstop = processAudio;
+
+        mediaRecorder.start(500);
+        recordBtn.classList.add("recording");
+        recordBtn.textContent = "⏹";
+        statusEl.textContent  = "Recording… tap to stop";
+        transcriptEl.style.display = "none";
+        sendBtn.style.display = "none";
+
+        seconds = 0;
+        timerInterval = setInterval(() => {
+          seconds++;
+          timerEl.textContent = formatTime(seconds);
+          if (seconds >= MAX_SECONDS) stopRecording();
+        }, 1000);
+
+      } catch (err) {
+        statusEl.textContent = "Microphone access denied. Please allow mic access.";
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      }
+      clearInterval(timerInterval);
+      timerEl.textContent  = "";
+      recordBtn.classList.remove("recording");
+      recordBtn.textContent = "🎤";
+    }
+
+    async function processAudio() {
+      statusEl.textContent = "Processing… ⏳";
+      recordBtn.disabled   = true;
+
+      const blob       = new Blob(audioChunks, { type: getSupportedMimeType() });
+      const arrayBuf   = await blob.arrayBuffer();
+      const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+
+      try {
+        const resp = await fetch(`${HF_SPACE_URL}/api/voice/transcribe`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio_base64: base64Audio,
+            language: langSelect.value,
+          }),
+        });
+        const data = await resp.json();
+
+        if (data.success && data.transcript) {
+          transcript = data.transcript;
+          transcriptEl.textContent   = transcript;
+          transcriptEl.style.display = "block";
+          sendBtn.style.display      = "block";
+          statusEl.textContent       = `✅ Transcribed (${data.language || "?"})`;
+        } else {
+          statusEl.textContent = data.error || "Could not understand. Please try again.";
+        }
+      } catch (err) {
+        statusEl.textContent = "Network error. Please try again.";
+      }
+      recordBtn.disabled = false;
+    }
+
+    sendBtn.addEventListener("click", async () => {
+      if (!transcript) return;
+      sendBtn.disabled     = true;
+      statusEl.textContent = "Sending…";
+      try {
+        await fetch(`${HF_SPACE_URL}/api/process_message`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ psid: PSID, message_type: "text", text: transcript }),
+        });
+        statusEl.textContent = "Message sent! ✅ You can close this window.";
+        if (window.MessengerExtensions) {
+          setTimeout(() => window.MessengerExtensions.requestCloseBrowser(null, null), 2000);
+        }
+      } catch (err) {
+        statusEl.textContent = "Failed to send. Please try again.";
+        sendBtn.disabled = false;
+      }
+    });
+
+    function getSupportedMimeType() {
+      const types = ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/mp4"];
+      for (const t of types) {
+        if (MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return "";
+    }
+
+    function formatTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = s % 60;
+      return `${m}:${sec.toString().padStart(2,"0")}`;
+    }
+  </script>
+</body>
+</html>

@@ -14,23 +14,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_KEY", ""))
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 
-def _get(endpoint: str, params: dict) -> list:
-    import urllib.request, urllib.parse, json
-    url = SUPABASE_URL + endpoint + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-    })
-    try:
-        r = urllib.request.urlopen(req, timeout=10)
-        return json.loads(r.read().decode())
-    except Exception as e:
-        logger.error("availability _get error: %s", e)
-        return []
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def check_availability(
@@ -44,11 +37,18 @@ def check_availability(
 
     available_count = MIN of daily counts (bottleneck-night approach).
     """
-    rows = _get("/rest/v1/room_availability", {
-        "room_type_id": f"eq.{room_type_id}",
-        "date":         f"gte.{check_in}",
-        "select":       "date,available_count",
-    })
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT date, available_count FROM room_availability "
+                    "WHERE room_type_id = %s AND date >= %s",
+                    (room_type_id, check_in),
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error("availability query error: %s", e)
+        rows = []
 
     # Build required date set
     required: set[str] = set()

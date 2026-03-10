@@ -8,38 +8,20 @@ If the new room is unavailable, rolls back automatically (soft lock released).
 import os
 import json
 import logging
-import urllib.request
-import urllib.parse
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
-def _headers() -> dict:
-    return {
-        "apikey":        SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
-
-
-def _patch(path: str, payload: dict) -> dict:
-    url  = f"{SUPABASE_URL}/rest/v1/{path}"
-    data = json.dumps(payload).encode()
-    req  = urllib.request.Request(url, data=data, headers=_headers(), method="PATCH")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-
-
-def _get(path: str) -> list:
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+def _get_conn():
+    import psycopg2
+    import psycopg2.extras
+    dsn = DATABASE_URL
+    if dsn and "sslmode" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def modify_booking(
@@ -55,11 +37,14 @@ def modify_booking(
     Returns the updated booking dict, or raises on failure.
     """
     # Fetch current booking
-    rows = _get(f"bookings?id=eq.{booking_id}&select=*")
-    if not rows:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM bookings WHERE id=%s", (booking_id,))
+            row = cur.fetchone()
+    if not row:
         raise ValueError(f"Booking {booking_id} not found")
 
-    current = rows[0]
+    current = dict(row)
     history_entry = {
         "modified_at":      datetime.now(timezone.utc).isoformat(),
         "modified_by":      agent_id,
@@ -75,17 +60,17 @@ def modify_booking(
     existing = current.get("modification_history") or []
     existing.append(history_entry)
 
-    updated = _patch(
-        f"bookings?id=eq.{booking_id}",
-        {
-            "check_in":             new_check_in,
-            "check_out":            new_check_out,
-            "room_type_id":         new_room_type,
-            "modification_history": existing,
-            "status":               "confirmed",
-            "updated_at":           datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE bookings SET check_in=%s, check_out=%s, room_type_id=%s, "
+                "modification_history=%s::jsonb, status='confirmed', updated_at=%s "
+                "WHERE id=%s RETURNING *",
+                (new_check_in, new_check_out, new_room_type,
+                 json.dumps(existing), datetime.now(timezone.utc), booking_id),
+            )
+            updated = dict(cur.fetchone())
+            conn.commit()
 
     log.info("Booking %s modified; fee $%.2f", booking_id, fee_usd)
-    return updated[0] if isinstance(updated, list) else updated
+    return updated
