@@ -266,3 +266,52 @@ CREATE POLICY "public_read_inventory" ON inventory FOR SELECT TO anon USING (ava
 --   ('City Inn', 'Affordable and central', 'Delhi', 'India', 3, 'INR',
 --    '["WiFi","Restaurant","Parking"]',
 --    'https://example.com/city_inn.jpg', true);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- FAQS TABLE  (semantic FAQ retrieval — replaces Qdrant)
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS faqs (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    hotel_id    UUID NOT NULL REFERENCES hotels(id) ON DELETE CASCADE,
+    question    TEXT NOT NULL,
+    answer      TEXT NOT NULL,
+    category    TEXT DEFAULT '',
+    embedding   JSONB,                  -- 768-dim LaBSE float list (computed at upsert)
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (hotel_id, question)
+);
+
+CREATE INDEX IF NOT EXISTS idx_faqs_hotel_id ON faqs(hotel_id);
+
+-- Allow service role full access
+ALTER TABLE faqs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_all_faqs" ON faqs FOR ALL TO service_role USING (true);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- FAQ FEEDBACK  (thumbs up/down tracking)
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS faq_feedback (
+    id          BIGSERIAL PRIMARY KEY,
+    faq_id      TEXT,
+    verdict     TEXT CHECK (verdict IN ('yes','no')),
+    psid_hash   TEXT,                   -- SHA-256 truncated, not PII
+    ts          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_faq_feedback_faq_id ON faq_feedback(faq_id);
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ANALYTICS EVENTS  (replaces Kafka + ClickHouse)
+-- ═══════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id          BIGSERIAL PRIMARY KEY,
+    event_type  TEXT        NOT NULL,
+    properties  JSONB       DEFAULT '{}',
+    ts          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_analytics_event_type ON analytics_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_analytics_ts          ON analytics_events(ts);

@@ -1,116 +1,75 @@
 """
 services/analytics_service/kafka_consumer.py
 ----------------------------------------------
-Consumes booking events from Kafka and inserts them into ClickHouse.
+Analytics event writer — PostgreSQL only (no Kafka, no ClickHouse).
 
-Topics consumed:
-  booking.created
-  booking.payment.succeeded
-  booking.cancelled
-  booking.modified
-  nlu.intent.logged
+Writes all events to the `analytics_events` table in the same Supabase
+PostgreSQL database used by the rest of the app.  Zero external services
+required.
 
-Runs as a standalone worker process (not a FastAPI route).
+The public API is intentionally identical to the old Kafka version so
+callers in analytics.py don't need to change:
+
+    from services.analytics_service.kafka_consumer import produce_event
+    await produce_event({"type": "booking.created", ...})
+
+Schema (run in Supabase SQL Editor):
+    CREATE TABLE IF NOT EXISTS analytics_events (
+        id          BIGSERIAL PRIMARY KEY,
+        event_type  TEXT         NOT NULL,
+        properties  JSONB        DEFAULT '{}',
+        ts          TIMESTAMPTZ  DEFAULT NOW()
+    );
 """
 
-import os
 import json
 import logging
+import os
 from datetime import datetime, timezone
+from typing import Any
 
 log = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP  = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_GROUP_ID   = os.environ.get("KAFKA_CONSUMER_GROUP",    "analytics-consumer")
-KAFKA_TOPICS     = ["booking.created", "booking.payment.succeeded",
-                    "booking.cancelled", "booking.modified", "nlu.intent.logged"]
-
-CLICKHOUSE_HOST  = os.environ.get("CLICKHOUSE_HOST",     "localhost")
-CLICKHOUSE_PORT  = int(os.environ.get("CLICKHOUSE_PORT", "9000"))
-CLICKHOUSE_DB    = os.environ.get("CLICKHOUSE_DB",       "bookhotel")
-CLICKHOUSE_USER  = os.environ.get("CLICKHOUSE_USER",     "default")
-CLICKHOUSE_PASS  = os.environ.get("CLICKHOUSE_PASSWORD", "")
+_DATABASE_URL = None
 
 
-def _get_ch_client():
-    try:
-        from clickhouse_driver import Client
-        return Client(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            database=CLICKHOUSE_DB,
-            user=CLICKHOUSE_USER,
-            password=CLICKHOUSE_PASS,
-        )
-    except ImportError:
-        raise RuntimeError("clickhouse-driver is required: pip install clickhouse-driver")
+def _get_connection():
+    """Return a psycopg2 connection; lazy-init DATABASE_URL."""
+    global _DATABASE_URL
+    import psycopg2
+    if _DATABASE_URL is None:
+        _DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    if not _DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not set — analytics events will be dropped")
+    return psycopg2.connect(_DATABASE_URL, connect_timeout=5)
 
 
-def _insert_booking_event(ch, event: dict) -> None:
-    ch.execute(
-        "INSERT INTO booking_events (event_type, booking_id, hotel_id, guest_id, "
-        "amount_usd, check_in, check_out, created_at) VALUES",
-        [{
-            "event_type": event.get("type", "unknown"),
-            "booking_id": event.get("booking_id", ""),
-            "hotel_id":   event.get("hotel_id", ""),
-            "guest_id":   event.get("guest_id", ""),
-            "amount_usd": float(event.get("amount_usd", 0)),
-            "check_in":   event.get("check_in", ""),
-            "check_out":  event.get("check_out", ""),
-            "created_at": datetime.now(timezone.utc),
-        }],
-    )
-
-
-def _insert_nlu_event(ch, event: dict) -> None:
-    ch.execute(
-        "INSERT INTO nlu_logs (sender_id, intent, confidence, language, created_at) VALUES",
-        [{
-            "sender_id":  event.get("sender_id", ""),
-            "intent":     event.get("intent", ""),
-            "confidence": float(event.get("confidence", 0)),
-            "language":   event.get("language", "en"),
-            "created_at": datetime.now(timezone.utc),
-        }],
-    )
-
-
-def run() -> None:
+async def produce_event(row: dict[str, Any]) -> None:
     """
-    Blocking Kafka consumer loop.
-    Call from a Celery worker or a dedicated Render background worker.
+    Persist an analytics event to PostgreSQL.
+
+    `row` should contain at minimum {"type": "..."} plus any extra fields.
+    All non-standard fields are stored as JSON in the `properties` column.
+
+    This function never raises — errors are logged and swallowed so that
+    analytics failures never block the booking flow.
     """
     try:
-        from kafka import KafkaConsumer
-    except ImportError:
-        raise RuntimeError("kafka-python is required: pip install kafka-python")
+        event_type = row.get("type") or row.get("event_type") or "unknown"
+        # Strip the top-level 'type' key; keep everything else as properties
+        props = {k: v for k, v in row.items() if k not in ("type", "event_type")}
 
-    consumer = KafkaConsumer(
-        *KAFKA_TOPICS,
-        bootstrap_servers=KAFKA_BOOTSTRAP.split(","),
-        group_id=KAFKA_GROUP_ID,
-        auto_offset_reset="earliest",
-        enable_auto_commit=True,
-        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-    )
-    ch = _get_ch_client()
-    log.info("Kafka consumer started; topics=%s", KAFKA_TOPICS)
-
-    for message in consumer:
+        conn = _get_connection()
         try:
-            event = message.value
-            topic = message.topic
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO analytics_events (event_type, properties, ts) "
+                        "VALUES (%s, %s, %s)",
+                        (event_type, json.dumps(props), datetime.now(timezone.utc)),
+                    )
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("analytics_event_failed event_type=%s error=%s", row.get("type"), exc)
 
-            if topic == "nlu.intent.logged":
-                _insert_nlu_event(ch, event)
-            else:
-                event["type"] = topic.split(".")[-1]
-                _insert_booking_event(ch, event)
-        except Exception as exc:
-            log.error("Error processing Kafka message: %s", exc)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    run()

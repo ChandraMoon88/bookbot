@@ -3,9 +3,9 @@
 scripts/hotel_onboarding.py
 -----------------------------
 Onboards a new hotel partner:
-  1. Inserts hotel record into Supabase
-  2. Indexes hotel into Elasticsearch
-  3. Embeds and upserts FAQ entries into Qdrant
+  1. Inserts hotel record into PostgreSQL (Supabase)
+  2. Indexes hotel into PostgreSQL FTS
+  3. Embeds FAQ entries with LaBSE and stores in PostgreSQL faqs table
 
 Usage:
     python scripts/hotel_onboarding.py --file data/hotel_sample.json
@@ -49,9 +49,19 @@ def index_elasticsearch(hotel: dict) -> None:
 
 def embed_faqs(hotel_id: str, faqs: list[dict]) -> None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+    # Encode FAQ questions with LaBSE, store in PostgreSQL faqs table
+    try:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("sentence-transformers/LaBSE")
+        questions = [f.get("question", "") for f in faqs]
+        vectors = model.encode(questions, normalize_embeddings=True).tolist()
+    except Exception as e:
+        print(f"  ⚠️  LaBSE encode failed ({e}) — storing FAQs without embeddings")
+        vectors = [[] for _ in faqs]
+
     from services.rag_service.qdrant_client import upsert_faqs
-    upsert_faqs(hotel_id, faqs)
-    print(f"  ✓ Qdrant upserted {len(faqs)} FAQ entries for hotel {hotel_id}")
+    upsert_faqs(hotel_id, faqs, vectors)
+    print(f"  ✓ PostgreSQL upserted {len(faqs)} FAQ entries for hotel {hotel_id}")
 
 
 def onboard(hotel_data: dict) -> None:
@@ -65,12 +75,12 @@ def onboard(hotel_data: dict) -> None:
     # 2. Elasticsearch
     index_elasticsearch({**hotel_data, "id": hotel_id})
 
-    # 3. Qdrant FAQs
+    # 3. FAQ embeddings → PostgreSQL
     faqs = hotel_data.get("faqs", [])
     if faqs:
         embed_faqs(hotel_id, faqs)
     else:
-        print("  ℹ️  No FAQs provided; skipping Qdrant upsert")
+        print("  ℹ️  No FAQs provided; skipping FAQ upsert")
 
     print(f"\n✅ Hotel '{hotel_data.get('name')}' onboarded successfully (id={hotel_id})\n")
 

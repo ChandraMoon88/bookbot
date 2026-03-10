@@ -3,8 +3,9 @@ hf_space/routers/analytics.py
 -------------------------------
 Analytics event ingestion and summary endpoints.
 
-Events are written to ClickHouse (via services/analytics_service/) for
-aggregation, and optionally to Supabase for simple reporting.
+Events are written to PostgreSQL `analytics_events` table (via
+services/analytics_service/kafka_consumer.produce_event — best-effort,
+never blocks the booking flow).
 
 Events captured:
   - message_received

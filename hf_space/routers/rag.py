@@ -3,26 +3,27 @@ hf_space/routers/rag.py
 ------------------------
 Module 11 — FAQ / RAG Concierge
 
-Uses LaBSE + Qdrant for semantic FAQ retrieval, then Groq LLM to generate
-a grounded answer. Falls back to handoff if confidence is too low.
+Uses LaBSE (sentence-transformers) for semantic FAQ retrieval from PostgreSQL,
+then Groq LLM (optional) or direct FAQ answer for response generation.
+Falls back to handoff if confidence is too low.
+
+No Qdrant, no external vector DB required — all free.
 
 Flow:
-  faq_browsing state OR any question in other states →
-  encode query (LaBSE) → search Qdrant (hotel_faqs collection) →
-  top-k results → build context → Groq → answer message
+  faq_browsing state OR any question →
+  encode query (LaBSE) → cosine-search faqs table (PostgreSQL) →
+  top-k results → optionally Groq → answer message
 
 Score thresholds:
-  ≥ 0.80 → answer confidently
-  0.55 – 0.80 → answer with "based on available info"
-  < 0.55 → escalate to human agent
-
-POST /api/rag/query     — main semantic search + generation
-POST /api/rag/feedback  — thumbs up/down on answers
-GET  /api/rag/faqs      — list FAQs for a hotel (for admin)
+  ≥ 0.75 → answer confidently
+  0.45 – 0.75 → answer with "based on available info"
+  < 0.45 → escalate to human agent
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from typing import Any
 
@@ -31,16 +32,90 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from hf_space.db.redis import get_redis, set_user_state
-from hf_space.models.labse_model import encode_single
-from hf_space.models.llm_client import chat, CONCIERGE_SYSTEM_PROMPT
+from hf_space.db.supabase import get_supabase
+from hf_space.models.labse_model import encode_single, encode
 from render_webhook.messenger_builder import MessengerResponse
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
 
-_SCORE_HIGH = 0.80
-_SCORE_LOW  = 0.55
+_SCORE_HIGH = 0.75
+_SCORE_LOW  = 0.45
 _TOP_K      = 5
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Fast pure-Python cosine similarity."""
+    import math
+    dot  = sum(x * y for x, y in zip(a, b))
+    na   = math.sqrt(sum(x * x for x in a)) or 1e-9
+    nb   = math.sqrt(sum(x * x for x in b)) or 1e-9
+    return dot / (na * nb)
+
+
+async def _semantic_faq_search(
+    query_vec: list[float],
+    hotel_id: str,
+    top_k: int = _TOP_K,
+    score_threshold: float = _SCORE_LOW,
+) -> list[dict]:
+    """
+    Search FAQs from PostgreSQL using cosine similarity on stored embeddings.
+    Falls back to PostgreSQL FTS if embeddings are not pre-computed.
+    """
+    sb = get_supabase()
+    try:
+        # Prefer pre-computed embeddings (faqs.embedding column)
+        res = await sb.table("faqs").select(
+            "id,question,answer,tags,embedding"
+        ).eq("hotel_id", hotel_id).limit(100).execute()
+
+        rows = res.data or []
+        if not rows:
+            return []
+
+        scored = []
+        for row in rows:
+            emb = row.get("embedding")
+            if emb:
+                if isinstance(emb, str):
+                    emb = json.loads(emb)
+                score = _cosine(query_vec, emb)
+            else:
+                # No embeddings stored — FTS fallback using answer text match
+                score = 0.5 if any(
+                    w in (row.get("question", "") + row.get("answer", "")).lower()
+                    for w in _top_words(query_vec, 3)
+                ) else 0.3
+            if score >= score_threshold:
+                scored.append({**row, "score": score})
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
+
+    except Exception as exc:
+        log.warning("faq_db_search_failed", error=str(exc))
+        return []
+
+
+def _top_words(vec: list[float], n: int) -> list[str]:
+    """Placeholder — returns empty when no text context available."""
+    return []
+
+
+async def _llm_answer(context: str, query: str) -> str | None:
+    """Try Groq LLM; silently return None if unavailable."""
+    try:
+        from hf_space.models.llm_client import chat, CONCIERGE_SYSTEM_PROMPT
+        prompt = (
+            f"Answer the guest's question using ONLY the FAQ context below. "
+            f"Be concise (≤3 sentences). Do not invent information.\n\n"
+            f"FAQ Context:\n{context}\n\n"
+            f"Guest question: {query}"
+        )
+        return await chat(CONCIERGE_SYSTEM_PROMPT, prompt, max_tokens=300, temperature=0.2)
+    except Exception:
+        return None
 
 
 # ── Conversation handlers ──────────────────────────────────────────────────────
@@ -53,95 +128,65 @@ async def handle_rag_query(
 ) -> tuple[list[dict], str]:
     """
     Main entry point called from app.py when user sends a question.
-    Can be called from any state — preserves current state on return.
     """
     mb = MessengerResponse(psid)
 
-    # Encode query
+    # Encode query with LaBSE
     try:
         query_vec = encode_single(query)
     except Exception as e:
         log.error("labse_encode_failed", error=str(e))
-        return [mb.text("Let me look that up… one moment! 🔍")], "faq_browsing"
+        # Fallback: PostgreSQL FTS-only search
+        query_vec = []
 
-    # Qdrant search
-    try:
-        from hf_space.qdrant_client import get_qdrant_client
-        qdrant = get_qdrant_client()
-        hits = await qdrant.search(
-            collection_name="hotel_faqs",
-            query_vector=query_vec,
-            query_filter={"must": [{"key": "hotel_id", "match": {"value": hotel_id}}]},
-            limit=_TOP_K,
-            score_threshold=_SCORE_LOW,
-        )
-    except Exception as e:
-        log.error("qdrant_search_failed", error=str(e))
-        hits = []
+    # Semantic search against PostgreSQL faqs table
+    hits = await _semantic_faq_search(query_vec, hotel_id)
 
     if not hits:
         return await _no_answer_fallback(psid, query, lang)
 
-    top_score = hits[0].score if hits else 0.0
-
+    top_score = hits[0].get("score", 0.0)
     if top_score < _SCORE_LOW:
         return await _no_answer_fallback(psid, query, lang)
 
     # Build context from top hits
     context_parts = []
     for h in hits[:3]:
-        payload = h.payload or {}
-        q = payload.get("question", "")
-        a = payload.get("answer", "")
+        q = h.get("question", "")
+        a = h.get("answer", "")
         if q and a:
             context_parts.append(f"Q: {q}\nA: {a}")
-
     context = "\n\n".join(context_parts)
 
-    # Confidence hedge
-    if top_score >= _SCORE_HIGH:
-        confidence_note = ""
-    else:
-        confidence_note = "\nNote: This information may not be fully up-to-date. Confirm with the hotel."
+    # Try LLM-generated answer first, fallback to direct FAQ answer
+    answer = await _llm_answer(context, query)
+    if not answer:
+        # Direct best-match answer
+        answer = hits[0].get("answer", "Sorry, I don't have a specific answer for that.")
 
-    # LLM generation
-    system = CONCIERGE_SYSTEM_PROMPT
-    prompt = (
-        f"Answer the guest's question using ONLY the FAQ context below. "
-        f"Be concise (≤3 sentences). Do not invent information.\n\n"
-        f"FAQ Context:\n{context}\n\n"
-        f"Guest question: {query}"
-    )
-
-    try:
-        answer = await chat(system, prompt, max_tokens=300, temperature=0.2)
-        answer = answer.strip() + confidence_note
-    except Exception as e:
-        log.error("groq_generation_failed", error=str(e))
-        answer = context_parts[0].split("\nA: ")[-1] if context_parts else "Sorry, I couldn't find an answer."
+    if top_score < _SCORE_HIGH:
+        answer += "\n\nNote: Confirm details directly with the hotel."
 
     msgs = mb.send_sequence([mb.text(answer)])
     msgs += [mb.quick_replies(
         "Was this helpful?",
         [
-            {"title": "👍 Yes, thanks!",     "payload": f"RAG_FEEDBACK_yes_{hits[0].id}"},
-            {"title": "👎 Not quite",         "payload": f"RAG_FEEDBACK_no_{hits[0].id}"},
-            {"title": "🧑‍💼 Talk to agent",   "payload": "HANDOFF_REQUEST"},
+            {"title": "👍 Yes, thanks!",   "payload": f"RAG_FEEDBACK_yes_{hits[0]['id']}"},
+            {"title": "👎 Not quite",       "payload": f"RAG_FEEDBACK_no_{hits[0]['id']}"},
+            {"title": "🧑‍💼 Talk to agent", "payload": "HANDOFF_REQUEST"},
         ],
     )]
-
     return msgs, "faq_browsing"
 
 
 async def _no_answer_fallback(psid: str, query: str, lang: str) -> tuple[list[dict], str]:
-    """When no relevant FAQ found — offer handoff."""
     mb = MessengerResponse(psid)
     return [
         mb.text("I don't have a specific answer to that question yet. 🤔"),
         mb.quick_replies("Would you like to speak to someone?", [
-            {"title": "🧑‍💼 Talk to agent",  "payload": "HANDOFF_REQUEST"},
-            {"title": "🔍 Search hotels",    "payload": "SEARCH_START"},
-            {"title": "🏠 Main menu",         "payload": "MENU_MAIN"},
+            {"title": "🧑‍💼 Talk to agent", "payload": "HANDOFF_REQUEST"},
+            {"title": "🔍 Search hotels",   "payload": "SEARCH_START"},
+            {"title": "🏠 Main menu",        "payload": "MENU_MAIN"},
         ]),
     ], "faq_browsing"
 

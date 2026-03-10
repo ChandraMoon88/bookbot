@@ -1,26 +1,47 @@
 """
 services/rag_service/qdrant_client.py
 ----------------------------------------
-Qdrant vector database client for hotel FAQ retrieval.
-Collection: 'hotel_faqs'
+FAQ retrieval — PostgreSQL + LaBSE cosine similarity (no Qdrant required).
+
+Public API is intentionally compatible with the old Qdrant version so
+callers (hotel_onboarding.py, rag.py) don't need to change signatures.
+
+PostgreSQL `faqs` table schema:
+    id          UUID / BIGSERIAL PRIMARY KEY
+    hotel_id    TEXT NOT NULL
+    question    TEXT NOT NULL
+    answer      TEXT NOT NULL
+    category    TEXT DEFAULT ''
+    embedding   JSONB        -- 768-dim LaBSE float list, computed at upsert
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
-import uuid as _uuid
 
-logger        = logging.getLogger(__name__)
-QDRANT_URL    = os.getenv("QDRANT_URL", "")
-QDRANT_KEY    = os.getenv("QDRANT_API_KEY", "")
-COLLECTION    = "hotel_faqs"
-VECTOR_DIM    = 768
+logger = logger = logging.getLogger(__name__)
+
+_DATABASE_URL = None
 
 
-def _client():
-    from qdrant_client import QdrantClient
-    return QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
+def _get_conn():
+    global _DATABASE_URL
+    import psycopg2
+    if _DATABASE_URL is None:
+        _DATABASE_URL = os.environ.get("DATABASE_URL", "")
+    if not _DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not set")
+    return psycopg2.connect(_DATABASE_URL, connect_timeout=5)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = math.sqrt(sum(x * x for x in a)) or 1e-9
+    nb  = math.sqrt(sum(x * x for x in b)) or 1e-9
+    return dot / (na * nb)
 
 
 def retrieve(
@@ -29,66 +50,85 @@ def retrieve(
     top_k: int = 3,
 ) -> list[dict]:
     """
-    Retrieve top_k FAQ chunks for a given hotel that are closest to query_vector.
-    ALWAYS filters by hotel_id to prevent cross-hotel leakage.
+    Retrieve top_k FAQ chunks for a given hotel closest to query_vector.
+    Uses in-memory cosine similarity over FAQs fetched from PostgreSQL.
     """
-    if not QDRANT_URL:
-        return []
-
     try:
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
-        qc = _client()
-        results = qc.search(
-            collection_name=COLLECTION,
-            query_vector=query_vector,
-            query_filter=Filter(
-                must=[FieldCondition(key="hotel_id", match=MatchValue(value=hotel_id))]
-            ),
-            limit=top_k,
-            with_payload=True,
-        )
-        return [
-            {
-                "score":   r.score,
-                "payload": r.payload,  # {question, answer, category, hotel_id}
-            }
-            for r in results
-        ]
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, question, answer, category, embedding "
+                    "FROM faqs WHERE hotel_id = %s LIMIT 200",
+                    (hotel_id,),
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return []
+
+        scored = []
+        for row_id, question, answer, category, embedding in rows:
+            if embedding:
+                emb = json.loads(embedding) if isinstance(embedding, str) else embedding
+                score = _cosine(query_vector, emb)
+            else:
+                score = 0.0
+            scored.append({
+                "score": score,
+                "payload": {
+                    "question": question,
+                    "answer": answer,
+                    "category": category or "",
+                    "hotel_id": hotel_id,
+                },
+            })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
     except Exception as e:
-        logger.error("Qdrant retrieve error: %s", e)
+        logger.error("faq_retrieve_error: %s", e)
         return []
 
 
 def upsert_faqs(hotel_id: str, faqs: list[dict], vectors: list[list[float]]) -> bool:
     """
-    Batch-index hotel FAQ entries into Qdrant.
-    faqs: [{question, answer, category}]
-    vectors: parallel list of 768-dim embeddings
+    Insert / update FAQ entries in PostgreSQL, storing their LaBSE embeddings.
+
+    faqs    : [{question, answer, category}]
+    vectors : parallel list of 768-dim LaBSE embeddings
     """
-    if not QDRANT_URL or not faqs:
+    if not faqs:
         return False
     try:
-        from qdrant_client.models import Distance, VectorParams, PointStruct
-        qc = _client()
-
-        # Ensure collection exists
-        existing = [c.name for c in qc.get_collections().collections]
-        if COLLECTION not in existing:
-            qc.create_collection(
-                collection_name=COLLECTION,
-                vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
-            )
-
-        points = [
-            PointStruct(
-                id=str(_uuid.uuid4()),
-                vector=vec,
-                payload={**faq, "hotel_id": hotel_id},
-            )
-            for faq, vec in zip(faqs, vectors)
-        ]
-        qc.upsert(collection_name=COLLECTION, points=points)
+        conn = _get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    for faq, vec in zip(faqs, vectors):
+                        cur.execute(
+                            """
+                            INSERT INTO faqs (hotel_id, question, answer, category, embedding)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (hotel_id, question) DO UPDATE
+                              SET answer    = EXCLUDED.answer,
+                                  category  = EXCLUDED.category,
+                                  embedding = EXCLUDED.embedding
+                            """,
+                            (
+                                hotel_id,
+                                faq.get("question", ""),
+                                faq.get("answer", ""),
+                                faq.get("category", ""),
+                                json.dumps(vec),
+                            ),
+                        )
+        finally:
+            conn.close()
         return True
     except Exception as e:
-        logger.error("Qdrant upsert error: %s", e)
+        logger.error("faq_upsert_error: %s", e)
         return False
+

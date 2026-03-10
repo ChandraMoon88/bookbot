@@ -95,22 +95,49 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _get_user_pref_vector(guest_id: str) -> list[float] | None:
-    """Fetch guest preference vector from Qdrant (if exists)."""
-    if not QDRANT_URL or not guest_id:
+    """
+    Build a guest preference vector from their booking history in PostgreSQL.
+    Averages the hotel embeddings of previous stays — no Qdrant needed.
+    Returns None if no history exists or on any error.
+    """
+    if not guest_id:
         return None
     try:
-        from qdrant_client import QdrantClient
-        qc = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-        results = qc.retrieve(
-            collection_name="guest_preferences",
-            ids=[guest_id],
-            with_vectors=True,
-        )
-        if results:
-            return results[0].vector
+        import os, psycopg2
+        db_url = os.environ.get("DATABASE_URL", "")
+        if not db_url:
+            return None
+        conn = psycopg2.connect(db_url, connect_timeout=3)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT h.name, h.city, h.stars
+                    FROM bookings b
+                    JOIN hotels h ON h.id = b.hotel_id
+                    WHERE b.guest_id = %s
+                      AND b.status = 'confirmed'
+                    ORDER BY b.created_at DESC
+                    LIMIT 10
+                    """,
+                    (guest_id,),
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return None
+
+        # Build a simple preference text from booking history and encode it
+        texts = [f"{name}, {city}, {stars} stars" for name, city, stars in rows]
+        model = _get_model()
+        vecs  = model.encode(texts, normalize_embeddings=True)
+        avg   = vecs.mean(axis=0).tolist()
+        return avg
     except Exception as e:
-        logger.warning("Qdrant preference fetch failed: %s", e)
-    return None
+        logger.warning("pref_vector_failed: %s", e)
+        return None
 
 
 def rank(
