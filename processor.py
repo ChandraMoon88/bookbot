@@ -3821,10 +3821,1092 @@ def _handle_advanced_booking_flow(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FAQ / HELP HANDLER
+# PART U — SEASONAL & EVENT BOOKING FLOWS
 # ─────────────────────────────────────────────────────────────────────────────
-# Part P — Platform-specific handlers
+
+_SEASONAL_KEYWORDS = {
+    "new year": "nye", "new years eve": "nye", "nye": "nye", "31 december": "nye",
+    "christmas": "xmas", "xmas": "xmas", "festive": "xmas",
+    "valentine": "valentines", "romantic": "valentines",
+    "ramadan": "ramadan", "iftar": "ramadan", "suhoor": "ramadan",
+    "eid": "eid",
+    "summer": "summer", "monsoon": "monsoon", "off-peak": "monsoon", "off peak": "monsoon",
+    "conference": "conference", "trade show": "conference", "ces": "conference",
+    "convention": "conference", "summit": "conference",
+    "match": "sports", "champions league": "sports", "world cup": "sports",
+    "grand prix": "sports", "formula 1": "sports", "f1": "sports",
+    "festival": "festival", "oktoberfest": "festival", "carnival": "festival",
+}
+
+
+def _handle_seasonal_flow(
+    sender_id: str, state: dict, user_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle seasonal, event, and festival booking flows (Part U)."""
+    raw_u = user_message.strip().upper()
+
+    # Detect seasonal event from NL
+    detected_event = None
+    for kw, event_type in _SEASONAL_KEYWORDS.items():
+        if kw in en_lower:
+            detected_event = event_type
+            break
+
+    # Button-triggered sub-flows
+    if raw_u == "NYE_BOOK" or detected_event == "nye":
+        city = state.get("city", "Dubai")
+        return (
+            f"🎆 New Year's Eve in {city} — Amazing Choice!\n\n"
+            "December 31st is our most popular night of the year.\n"
+            "NYE packages include:\n"
+            "✅ Gala dinner\n"
+            "✅ Fireworks view room\n"
+            "✅ Champagne on arrival\n"
+            "✅ Midnight countdown event\n\n"
+            "⚠️ NYE rooms sell out fast — prices are 2–5× higher.\n"
+            "Shall I search NYE packages for you?\n\n"
+            "Which city for New Year's Eve?",
+            [
+                {"content_type": "text", "title": "Dubai", "payload": "NYE_DUBAI"},
+                {"content_type": "text", "title": "London", "payload": "NYE_LONDON"},
+                {"content_type": "text", "title": "Paris", "payload": "NYE_PARIS"},
+                {"content_type": "text", "title": "New York", "payload": "NYE_NYC"},
+                {"content_type": "text", "title": "Sydney", "payload": "NYE_SYDNEY"},
+                {"content_type": "text", "title": "Other City", "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u in ("NYE_DUBAI", "NYE_LONDON", "NYE_PARIS", "NYE_NYC", "NYE_SYDNEY"):
+        city_map = {
+            "NYE_DUBAI": "Dubai", "NYE_LONDON": "London", "NYE_PARIS": "Paris",
+            "NYE_NYC": "New York", "NYE_SYDNEY": "Sydney",
+        }
+        city = city_map[raw_u]
+        state["city"] = city
+        state["_seasonal_event"] = "nye"
+        state["step"] = "checkin"
+        return (
+            f"🎆 NYE Package Search — {city}\n\n"
+            "I'll filter for hotels with fireworks view, gala dinner,\n"
+            "and countdown event packages.\n\n"
+            "Check-in date (usually Dec 30 or 31)?",
+            [
+                {"content_type": "text", "title": "30 Dec", "payload": "CHECKIN_2026-12-30"},
+                {"content_type": "text", "title": "31 Dec", "payload": "CHECKIN_2026-12-31"},
+            ],
+        )
+
+    if detected_event == "xmas":
+        city = state.get("city", "")
+        return (
+            "🎄 Christmas Holiday Booking!\n\n"
+            "I'll search for family-friendly hotels with Christmas packages:\n"
+            "✅ Santa meet & greet for children\n"
+            "✅ Christmas Day lunch/dinner included\n"
+            "✅ Festive decorations & activities\n"
+            "✅ Family suite options\n\n"
+            "Which city for Christmas?",
+            [
+                {"content_type": "text", "title": "London", "payload": "XMAS_LONDON"},
+                {"content_type": "text", "title": "Paris",  "payload": "XMAS_PARIS"},
+                {"content_type": "text", "title": "Vienna", "payload": "XMAS_VIENNA"},
+                {"content_type": "text", "title": "Other",  "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u.startswith("XMAS_"):
+        city = raw_u[5:].capitalize()
+        state["city"] = city
+        state["_seasonal_event"] = "xmas"
+        state["step"] = "checkin"
+        return (
+            f"🎄 Christmas stay in {city} — magical choice!\n\n"
+            "Check-in date (typically 22–24 December)?",
+            [
+                {"content_type": "text", "title": "22 Dec", "payload": "CHECKIN_2026-12-22"},
+                {"content_type": "text", "title": "23 Dec", "payload": "CHECKIN_2026-12-23"},
+                {"content_type": "text", "title": "24 Dec", "payload": "CHECKIN_2026-12-24"},
+            ],
+        )
+
+    if detected_event == "valentines":
+        return (
+            "💕 Valentine's Day Special!\n\n"
+            "I'll find the most romantic hotels with packages including:\n"
+            "🌹 Rose petals on bed\n"
+            "🍾 Champagne on arrival\n"
+            "🛁 Rose petal bath\n"
+            "🕯️ Candle-lit private dinner\n"
+            "💌 Personalised welcome message\n\n"
+            "Which city for your romantic escape?",
+            [
+                {"content_type": "text", "title": "Paris",     "payload": "VAL_PARIS"},
+                {"content_type": "text", "title": "Rome",      "payload": "VAL_ROME"},
+                {"content_type": "text", "title": "Maldives",  "payload": "VAL_MALDIVES"},
+                {"content_type": "text", "title": "Santorini", "payload": "VAL_SANTORINI"},
+                {"content_type": "text", "title": "Other City","payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u.startswith("VAL_"):
+        city_map = {"VAL_PARIS": "Paris", "VAL_ROME": "Rome", "VAL_MALDIVES": "Maldives", "VAL_SANTORINI": "Santorini"}
+        city = city_map.get(raw_u, raw_u[4:].capitalize())
+        state["city"] = city
+        state["_seasonal_event"] = "valentines"
+        state["step"] = "checkin"
+        return (
+            f"💕 Romantic Package Search — {city}\n\n"
+            "Would you like to add a surprise message for your partner\n"
+            "displayed when they open the room door?\n\n"
+            "When is your romantic getaway?",
+            [
+                {"content_type": "text", "title": "Feb 14 (Valentine's Day)", "payload": "CHECKIN_2027-02-14"},
+                {"content_type": "text", "title": "Weekend before",           "payload": "CHECKIN_2027-02-13"},
+                {"content_type": "text", "title": "Pick another date",        "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if detected_event == "ramadan":
+        return (
+            "🌙 Ramadan Mubarak!\n\n"
+            "I'll filter hotels with Ramadan amenities:\n"
+            "✅ 100% Halal-certified kitchen\n"
+            "✅ Suhoor (pre-dawn) room service\n"
+            "✅ Iftar buffet\n"
+            "✅ Prayer mat, Quran & Qibla in every room\n"
+            "✅ Nearby mosques listed\n\n"
+            "Which city for Ramadan?",
+            [
+                {"content_type": "text", "title": "Istanbul",  "payload": "RAM_ISTANBUL"},
+                {"content_type": "text", "title": "Dubai",     "payload": "RAM_DUBAI"},
+                {"content_type": "text", "title": "Kuala Lumpur","payload": "RAM_KL"},
+                {"content_type": "text", "title": "Other City","payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u.startswith("RAM_"):
+        city_map = {"RAM_ISTANBUL": "Istanbul", "RAM_DUBAI": "Dubai", "RAM_KL": "Kuala Lumpur"}
+        city = city_map.get(raw_u, raw_u[4:].capitalize())
+        state["city"] = city
+        state["_halal_filter"] = True
+        state["step"] = "checkin"
+        return (f"🌙 Halal & Ramadan-friendly hotels in {city}.\nWhat are your dates?", [])
+
+    if detected_event == "eid":
+        return (
+            "🌙 Eid Mubarak! Let me find special Eid packages for you.\n\n"
+            "Which city are you celebrating in?",
+            [
+                {"content_type": "text", "title": "Dubai",   "payload": "RAM_DUBAI"},
+                {"content_type": "text", "title": "Istanbul","payload": "RAM_ISTANBUL"},
+                {"content_type": "text", "title": "London",  "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if detected_event == "conference":
+        return (
+            "💼 Conference Booking!\n\n"
+            "I'll prioritise:\n"
+            "📍 Hotels close to the venue\n"
+            "🌐 Verified fast Wi-Fi (speed tested)\n"
+            "💼 Business centre & meeting rooms\n"
+            "🚌 Shuttle to conference venue\n"
+            "🧾 Business invoice for expense claim\n\n"
+            "Which conference/city?",
+            [
+                {"content_type": "text", "title": "Las Vegas (CES/NAB)", "payload": "CONF_LAS_VEGAS"},
+                {"content_type": "text", "title": "Barcelona (MWC)",     "payload": "CONF_BARCELONA"},
+                {"content_type": "text", "title": "Dubai (GITEX)",       "payload": "CONF_DUBAI"},
+                {"content_type": "text", "title": "Other city",          "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u.startswith("CONF_"):
+        city_map = {"CONF_LAS_VEGAS": "Las Vegas", "CONF_BARCELONA": "Barcelona", "CONF_DUBAI": "Dubai"}
+        city = city_map.get(raw_u, raw_u[5:].replace("_", " ").title())
+        state["city"] = city
+        state["_conference_mode"] = True
+        state["step"] = "checkin"
+        return (
+            f"💼 Conference hotels in {city}.\n\n"
+            "I'll filter for fast Wi-Fi, business centre,\n"
+            "and proximity to the convention centre.\n\n"
+            "What are your conference dates?",
+            [],
+        )
+
+    if detected_event == "sports":
+        return (
+            "⚽ Sports Event Booking!\n\n"
+            "I'll find hotels with:\n"
+            "📍 Closest distance to the stadium\n"
+            "🚌 Match-day shuttle service\n"
+            "📺 Fan zone / live match screening\n"
+            "🍺 Pre/post match packages\n\n"
+            "Which sport / event and city?",
+            [
+                {"content_type": "text", "title": "Football Match",   "payload": "SPORT_FOOTBALL"},
+                {"content_type": "text", "title": "Cricket",          "payload": "SPORT_CRICKET"},
+                {"content_type": "text", "title": "Formula 1",        "payload": "SPORT_F1"},
+                {"content_type": "text", "title": "Other sport",      "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if detected_event == "monsoon":
+        return (
+            "🌴 Off-Peak / Monsoon Deals!\n\n"
+            "Monsoon season offers incredible savings — up to 75% off peak rates.\n"
+            "Perfect for: spa retreats, yoga, green landscapes, budget travel.\n\n"
+            "Which destination interests you?",
+            [
+                {"content_type": "text", "title": "Goa (India)",      "payload": "MONSOON_GOA"},
+                {"content_type": "text", "title": "Bali (Indonesia)", "payload": "MONSOON_BALI"},
+                {"content_type": "text", "title": "Kerala (India)",   "payload": "MONSOON_KERALA"},
+                {"content_type": "text", "title": "Other",            "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    if raw_u.startswith("MONSOON_"):
+        city_map = {"MONSOON_GOA": "Goa", "MONSOON_BALI": "Bali", "MONSOON_KERALA": "Kerala"}
+        city = city_map.get(raw_u, raw_u[8:].capitalize())
+        state["city"] = city
+        state["step"]  = "checkin"
+        return (
+            f"🌿 Off-peak / monsoon deals in {city}.\n"
+            "You can save up to 75% vs peak season!\n\n"
+            "What are your dates?",
+            [],
+        )
+
+    if detected_event == "summer" and any(dest in en_lower for dest in ["maldives", "bali", "phuket", "ibiza"]):
+        return (
+            "☀️ Summer Peak Season Warning!\n\n"
+            "⚠️ Summer is peak season for your chosen destination.\n"
+            "Hotels fill up fast and prices are highest in July–August.\n\n"
+            "🔒 Tip: Book now to lock in today's rate.\n"
+            "Prices typically rise 25–40% closer to the date.\n\n"
+            "Shall I search available hotels?",
+            [
+                {"content_type": "text", "title": "Yes, search now",    "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Show me off-peak dates", "payload": "MONSOON_BALI"},
+                {"content_type": "text", "title": "Set price alert",    "payload": "PRICE_ALERT"},
+            ],
+        )
+
+    return None, []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
+# PART V — CORPORATE & BUSINESS TRAVEL MODULE
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CORP_KEYWORDS = {
+    "corporate account", "set up corporate", "business account", "company account",
+    "business travel", "corporate booking", "gst invoice", "vat invoice",
+    "expense report", "concur", "sap", "travel policy", "corporate rate",
+    "team booking", "book for team", "book for colleague",
+    "multi-city trip", "multi city trip", "travel report", "policy violation",
+    "carbon offset",
+}
+
+
+def _handle_corporate_flow(
+    sender_id: str, state: dict, user_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle corporate & business travel module (Part V)."""
+    raw_u = user_message.strip().upper()
+
+    # Corporate account setup
+    if raw_u == "CORP_SETUP" or any(kw in en_lower for kw in (
+        "set up corporate", "corporate account", "company account", "bookbot business"
+    )):
+        state["corp_step"] = "company_name"
+        return (
+            "🏢 Welcome to BookBot Business!\n\n"
+            "Setting up a corporate account gives your company:\n"
+            "✅ Negotiated corporate rates (up to 30% off)\n"
+            "✅ Centralised invoicing & billing\n"
+            "✅ Travel policy enforcement\n"
+            "✅ Multi-traveler management dashboard\n"
+            "✅ Monthly consolidated invoice\n"
+            "✅ Expense report integration (SAP/Concur/QuickBooks)\n"
+            "✅ Carbon offset reporting\n\n"
+            "What is your company name?",
+            [{"content_type": "text", "title": "Cancel", "payload": "RESTART"}],
+        )
+
+    corp_step = state.get("corp_step")
+
+    if corp_step == "company_name":
+        state["corp_name"] = user_message.strip()
+        state["corp_step"] = "domain"
+        return (
+            f"Great! And your company email domain?\n"
+            "(e.g. yourcompany.com — we'll verify all employees)",
+            [],
+        )
+
+    if corp_step == "domain":
+        domain = user_message.strip().lower()
+        if "." not in domain:
+            return ("Please enter a valid domain, e.g. yourcompany.com", [])
+        state["corp_domain"] = domain
+        state["corp_step"] = "traveler_count"
+        return (
+            f"Perfect — domain: {domain}\n\n"
+            "How many employees will travel monthly?",
+            [
+                {"content_type": "text", "title": "1–5 travelers",     "payload": "CORP_SIZE_S"},
+                {"content_type": "text", "title": "6–20 travelers",    "payload": "CORP_SIZE_M"},
+                {"content_type": "text", "title": "21–100 travelers",  "payload": "CORP_SIZE_L"},
+                {"content_type": "text", "title": "100+ (Enterprise)", "payload": "CORP_SIZE_E"},
+            ],
+        )
+
+    if raw_u.startswith("CORP_SIZE_"):
+        size_map = {"CORP_SIZE_S": "1–5", "CORP_SIZE_M": "6–20",
+                    "CORP_SIZE_L": "21–100", "CORP_SIZE_E": "100+"}
+        size = size_map.get(raw_u, "1–5")
+        name = state.get("corp_name", "your company")
+        domain = state.get("corp_domain", "")
+        state.pop("corp_step", None)
+        return (
+            f"🎉 Corporate account created for {name}!\n\n"
+            f"Company: {name}\n"
+            f"Domain : {domain}\n"
+            f"Size   : {size} monthly travelers\n\n"
+            "A verification email has been sent to your domain admin.\n"
+            "Once verified, your corporate rates activate within 24 hours.\n\n"
+            "Your dedicated business support line: +1-800-BOOKBOT\n\n"
+            "What would you like to do next?",
+            [
+                {"content_type": "text", "title": "Book Business Travel", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Travel Report",        "payload": "CORP_REPORT"},
+                {"content_type": "text", "title": "Team Booking",         "payload": "CORP_TEAM"},
+                {"content_type": "text", "title": "Main Menu",            "payload": "RESTART"},
+            ],
+        )
+
+    # Corporate reporting
+    if raw_u == "CORP_REPORT" or any(kw in en_lower for kw in (
+        "travel report", "travel spending", "travel expense", "monthly report",
+        "policy violation", "carbon offset"
+    )):
+        return (
+            "📊 Corporate Travel Report\n\n"
+            "Choose your report type:",
+            [
+                {"content_type": "text", "title": "This Month's Spend",  "payload": "CORP_RPT_MONTH"},
+                {"content_type": "text", "title": "Last Month",           "payload": "CORP_RPT_LAST"},
+                {"content_type": "text", "title": "Policy Violations",    "payload": "CORP_RPT_VIOLATIONS"},
+                {"content_type": "text", "title": "Carbon Footprint",     "payload": "CORP_RPT_CARBON"},
+                {"content_type": "text", "title": "Download PDF",         "payload": "CORP_RPT_PDF"},
+                {"content_type": "text", "title": "Email to CFO",         "payload": "CORP_RPT_EMAIL"},
+            ],
+        )
+
+    if raw_u == "CORP_RPT_MONTH":
+        return (
+            "📊 Corporate Travel Report — This Month\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Request your full report from your corporate dashboard.\n\n"
+            "The report includes:\n"
+            "✅ Total spend by city\n"
+            "✅ Spend by traveler\n"
+            "✅ Policy compliance rate\n"
+            "✅ CO₂ footprint\n"
+            "✅ Savings vs public rate\n\n"
+            "Shall I email this to your finance team?",
+            [
+                {"content_type": "text", "title": "Email to Finance", "payload": "CORP_RPT_EMAIL"},
+                {"content_type": "text", "title": "Download PDF",     "payload": "CORP_RPT_PDF"},
+                {"content_type": "text", "title": "Main Menu",        "payload": "RESTART"},
+            ],
+        )
+
+    if raw_u in ("CORP_RPT_PDF", "CORP_RPT_EMAIL"):
+        action = "emailed to your finance team" if raw_u == "CORP_RPT_EMAIL" else "ready for download"
+        return (
+            f"✅ Your corporate travel report is {action}.\n\n"
+            "Need anything else?",
+            [
+                {"content_type": "text", "title": "Book Business Travel", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Main Menu",            "payload": "RESTART"},
+            ],
+        )
+
+    if raw_u == "CORP_RPT_CARBON" or "carbon" in en_lower:
+        return (
+            "🌱 Carbon Footprint Report\n\n"
+            "Your hotel stays generate an estimated CO₂ footprint.\n"
+            "BookBot can offset your carbon emissions.\n\n"
+            "Would you like to purchase carbon offsets\n"
+            "for your company's hotel travel?",
+            [
+                {"content_type": "text", "title": "Yes — offset all travel", "payload": "CORP_CARBON_BUY"},
+                {"content_type": "text", "title": "Tell me more",            "payload": "FAQ_CARBON"},
+                {"content_type": "text", "title": "Not now",                 "payload": "RESTART"},
+            ],
+        )
+
+    # Team booking
+    if raw_u == "CORP_TEAM" or any(kw in en_lower for kw in (
+        "team booking", "book for team", "multiple rooms for", "book colleague"
+    )):
+        state["corp_team_step"] = "room_count"
+        return (
+            "👥 Team Booking\n\n"
+            "How many rooms do you need for your team?",
+            [
+                {"content_type": "text", "title": "2–3 rooms",  "payload": "CORP_TEAM_2"},
+                {"content_type": "text", "title": "4–5 rooms",  "payload": "CORP_TEAM_5"},
+                {"content_type": "text", "title": "6–10 rooms", "payload": "CORP_TEAM_10"},
+                {"content_type": "text", "title": "10+ rooms",  "payload": "GROUP_BOOKING"},
+            ],
+        )
+
+    if raw_u.startswith("CORP_TEAM_"):
+        rooms = raw_u.split("_")[-1]
+        state["corp_team_rooms"] = rooms
+        state["corp_team_step"]  = "guest_list"
+        return (
+            f"👥 Team booking: {rooms} rooms\n\n"
+            "Do you want to send confirmations to each team member directly?",
+            [
+                {"content_type": "text", "title": "Yes — email each person", "payload": "CORP_TEAM_EMAIL_ALL"},
+                {"content_type": "text", "title": "All to me only",          "payload": "CORP_TEAM_EMAIL_ME"},
+                {"content_type": "text", "title": "Enter guest list now",    "payload": "CORP_TEAM_LIST"},
+            ],
+        )
+
+    if raw_u == "CORP_TEAM_LIST":
+        state["corp_team_step"] = "parsing_list"
+        return (
+            "Please share the guest list in this format\n"
+            "(one per line, up to 20 guests):\n\n"
+            "Name | Email\n\n"
+            "Example:\n"
+            "John Smith | john@company.com\n"
+            "Jane Doe | jane@company.com",
+            [{"content_type": "text", "title": "Cancel", "payload": "RESTART"}],
+        )
+
+    if state.get("corp_team_step") == "parsing_list":
+        lines = [l.strip() for l in user_message.strip().split("\n") if "|" in l]
+        if not lines:
+            return ("I could not parse the guest list. Use Name | Email format.", [])
+        guests = []
+        for ln in lines:
+            parts = ln.split("|", 1)
+            if len(parts) == 2:
+                g_name = parts[0].strip()
+                g_email = parts[1].strip()
+                if re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', g_email):
+                    guests.append(f"{g_name} <{g_email}>")
+        state.pop("corp_team_step", None)
+        if not guests:
+            return ("Could not find valid email addresses. Please try again.", [])
+        state["corp_guest_list"] = guests
+        state["step"] = "city"
+        return (
+            f"✅ {len(guests)} guest(s) added:\n" +
+            "\n".join(f"  • {g}" for g in guests[:5]) +
+            ("\n  ..." if len(guests) > 5 else "") +
+            "\n\nConfirmations will be sent to each person after booking.\n\n"
+            "Now let's search for hotels — which city?",
+            [],
+        )
+
+    # Multi-city trip
+    if any(kw in en_lower for kw in ("multi-city", "multi city", "multiple cities", "several cities")):
+        return (
+            "✈️ Multi-City Business Trip!\n\n"
+            "I can book hotels across multiple cities at once.\n"
+            "Please list your itinerary:\n\n"
+            "Format: City — arrival date — departure date\n\n"
+            "Example:\n"
+            "Bangalore — Mon Mar 16 — Wed Mar 18\n"
+            "Mumbai — Thu Mar 19 — Fri Mar 20\n"
+            "Delhi — Mon Mar 23 — Fri Mar 27",
+            [
+                {"content_type": "text", "title": "Enter my itinerary", "payload": "CORP_MULTICITY"},
+                {"content_type": "text", "title": "Book one city only", "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    # Expense report
+    if raw_u.startswith("CORP_INVOICE_") or any(kw in en_lower for kw in (
+        "expense report", "invoice format", "sap concur", "gst invoice", "expense claim"
+    )):
+        ref = raw_u.replace("CORP_INVOICE_", "") if raw_u.startswith("CORP_INVOICE_") else ""
+        ref_s = f"booking {ref}" if ref else "your booking"
+        return (
+            f"📋 Expense Documentation — {ref_s}\n\n"
+            "I can send the invoice in multiple formats:\n\n"
+            "1. PDF Invoice (company letterhead)\n"
+            "2. CSV for SAP Concur upload\n"
+            "3. XML for QuickBooks import\n"
+            "4. JSON for custom ERP systems\n"
+            "5. Email directly to your finance team\n\n"
+            "The invoice includes:\n"
+            "✅ Hotel name, address, VAT number\n"
+            "✅ Rate breakdown per night\n"
+            "✅ Taxes and service charges itemized\n"
+            "✅ GST/VAT split\n"
+            "✅ Employee ID / cost center",
+            [
+                {"content_type": "text", "title": "PDF Invoice",        "payload": f"DL_PDF_{ref}"},
+                {"content_type": "text", "title": "SAP Concur CSV",     "payload": f"DL_GST_{ref}"},
+                {"content_type": "text", "title": "Email Finance Team", "payload": f"EMAIL_RECEIPT_{ref}"},
+                {"content_type": "text", "title": "All Formats (ZIP)",  "payload": f"DL_CORP_{ref}"},
+            ],
+        )
+
+    return None, []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART W — ACCESSIBILITY & SPECIAL NEEDS MODULE
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ACCESS_KEYWORDS = {
+    "wheelchair": "wheelchair", "disabled": "wheelchair", "ada room": "wheelchair",
+    "accessible room": "wheelchair", "roll-in shower": "wheelchair",
+    "visual impairment": "visual", "visually impaired": "visual", "blind": "visual",
+    "guide dog": "visual", "seeing eye dog": "visual",
+    "deaf": "hearing", "hearing impairment": "hearing", "hard of hearing": "hearing",
+    "visual alarm": "hearing",
+    "insulin": "medical", "diabetic": "medical", "medical fridge": "medical",
+    "medical needs": "medical", "nurse on call": "medical",
+    "special needs": "any_access", "accessibility": "any_access",
+}
+
+
+def _handle_accessibility_flow(
+    sender_id: str, state: dict, user_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle accessibility & special needs booking (Part W)."""
+    raw_u = user_message.strip().upper()
+
+    # Detect accessibility need from NL
+    detected_need = None
+    for kw, need_type in _ACCESS_KEYWORDS.items():
+        if kw in en_lower:
+            detected_need = need_type
+            break
+
+    if raw_u == "ACCESSIBLE_BOOKING" or (detected_need and not raw_u.startswith("HOTEL_")):
+        pass  # continue to sub-flow below
+    elif not detected_need:
+        return None, []
+
+    # wheelchair / accessible rooms
+    if detected_need == "wheelchair" or raw_u == "ACCESS_WHEELCHAIR":
+        state["_accessibility"] = ["wheelchair"]
+        return (
+            "♿ Wheelchair Accessible Room Search\n\n"
+            "I'll filter for fully accessible properties with:\n"
+            "✅ Roll-in shower (no lip/step)\n"
+            "✅ Wide doorways (≥81 cm / 32 inches)\n"
+            "✅ Lowered bed height available\n"
+            "✅ Accessible bathroom with grab rails\n"
+            "✅ Elevator access to all floors\n"
+            "✅ Accessible pool (hydraulic lift)\n"
+            "✅ Level / ramped entrance\n"
+            "✅ Accessible parking\n\n"
+            "Do you have any additional requirements?",
+            [
+                {"content_type": "text", "title": "Also need visual assist",   "payload": "ACCESS_VISUAL"},
+                {"content_type": "text", "title": "Also need hearing assist",  "payload": "ACCESS_HEARING"},
+                {"content_type": "text", "title": "Also need medical support", "payload": "ACCESS_MEDICAL"},
+                {"content_type": "text", "title": "No — search hotels now",   "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    # visual impairment / guide dog
+    if detected_need == "visual" or raw_u == "ACCESS_VISUAL":
+        state["_accessibility"] = state.get("_accessibility", []) + ["visual_impairment"]
+        return (
+            "🦮 Visual Impairment & Guide Dog Assistance\n\n"
+            "I'll filter for hotels with:\n"
+            "✅ Guide dogs / service animals welcome (all areas)\n"
+            "✅ Braille signage in corridors and rooms\n"
+            "✅ Audio elevator announcements\n"
+            "✅ Large-print menus available\n"
+            "✅ Trained accessibility concierge\n"
+            "✅ Orientation assistance on arrival\n"
+            "✅ Dog relief area on premises\n\n"
+            "Please note: Guide dogs are welcome free of charge\n"
+            "— no pet deposit required.\n\n"
+            "Which city are you visiting?",
+            [
+                {"content_type": "text", "title": "London",   "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "New York", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Other",    "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    # hearing impairment / deaf
+    if detected_need == "hearing" or raw_u == "ACCESS_HEARING":
+        state["_accessibility"] = state.get("_accessibility", []) + ["hearing_impairment"]
+        return (
+            "🔔 Deaf-Friendly Hotel Features\n\n"
+            "I'll look for hotels with:\n"
+            "✅ Visual fire alarm / strobe light system\n"
+            "✅ Vibrating alarm clock (on request)\n"
+            "✅ Closed captioning on all TVs\n"
+            "✅ Video relay service for calls\n"
+            "✅ SMS/text communication with front desk\n"
+            "✅ Visual doorbell / knock alert\n"
+            "✅ Text-based check-in option\n\n"
+            "I'll also communicate all confirmations via text/chat only\n"
+            "— no phone calls required.\n\n"
+            "Which city and dates?",
+            [
+                {"content_type": "text", "title": "Search Hotels", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Add wheelchair needs", "payload": "ACCESS_WHEELCHAIR"},
+            ],
+        )
+
+    # medical / health needs
+    if detected_need == "medical" or raw_u == "ACCESS_MEDICAL":
+        state["_accessibility"] = state.get("_accessibility", []) + ["medical"]
+        return (
+            "💊 Medical & Health Needs\n\n"
+            "I'll filter hotels with:\n"
+            "✅ In-room mini-fridge / medical fridge (0–4°C)\n"
+            "✅ 24/7 nurse on call or medical concierge\n"
+            "✅ Nearby pharmacy (within 500 m)\n"
+            "✅ Nearest hospital / emergency room listed\n"
+            "✅ Sharps disposal bin available\n"
+            "✅ Diabetic-friendly meal options\n\n"
+            "⚠️ I always recommend calling the hotel directly\n"
+            "to confirm specific medical equipment availability.\n\n"
+            "Which city?",
+            [
+                {"content_type": "text", "title": "Search Hotels", "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    # Generic accessibility query
+    if detected_need == "any_access" or raw_u == "ACCESSIBLE_BOOKING":
+        return (
+            "♿ Accessibility & Special Needs\n\n"
+            "Which type of accessibility support do you need?",
+            [
+                {"content_type": "text", "title": "♿ Wheelchair Access",    "payload": "ACCESS_WHEELCHAIR"},
+                {"content_type": "text", "title": "🦮 Visual Impairment",   "payload": "ACCESS_VISUAL"},
+                {"content_type": "text", "title": "🔔 Hearing Impairment",  "payload": "ACCESS_HEARING"},
+                {"content_type": "text", "title": "💊 Medical Needs",       "payload": "ACCESS_MEDICAL"},
+                {"content_type": "text", "title": "🐾 Service Animal",      "payload": "ACCESS_VISUAL"},
+            ],
+        )
+
+    return None, []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART X — CRISIS & EMERGENCY HANDLING MODULE
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CRISIS_KEYWORDS = {
+    "emergency booking": "emergency", "flood": "emergency", "fire": "emergency",
+    "earthquake": "emergency", "evacuation": "emergency", "disaster": "emergency",
+    "urgent accommodation": "emergency", "tonight urgently": "emergency",
+    "flight cancelled": "stranded", "flight canceled": "stranded",
+    "stranded at airport": "stranded", "stuck at airport": "stranded",
+    "my hotel is overbooked": "overbooking", "hotel overbooked": "overbooking",
+    "hotel has no room": "overbooking", "walked from hotel": "overbooking",
+    "medical emergency": "medical_emergency", "hospital near": "medical_emergency",
+    "need hospital": "medical_emergency", "need a doctor": "medical_emergency",
+    "lost passport": "lost_docs", "lost my passport": "lost_docs",
+    "stolen passport": "lost_docs", "lost documents": "lost_docs",
+    "can't check in without id": "lost_docs",
+}
+
+_EMBASSY_CONTACTS = {
+    "indian": ("India", "📞 Emergency Passport Line\nHigh Commission of India, London: +44-20-7836-8484\nEmbassy of India, Washington DC: +1-202-939-7000\nIndian Consulate General (worldwide): hcilondon.in"),
+    "british": ("UK", "📞 Her Majesty's Passport Office\nEmergency Travel Document: +44-300-222-0000\nFCO Global Response Centre: +44-20-7008-5000"),
+    "american": ("USA", "📞 US Embassy Emergency Passport\nSmart Traveler Enrollment: step.state.gov\nEmergency: +1-888-407-4747 (from US) | +1-202-501-4444 (international)"),
+    "australian": ("Australia", "📞 Australian Passport Emergency\nAustralian Embassy: smartraveller.gov.au\n24/7 consular emergency: 1300 555 135"),
+    "canadian": ("Canada", "📞 Canadian Emergency Passport\n+1-800-387-3124 (Canada/US) | +1-613-996-8885 (international)"),
+}
+
+
+def _handle_crisis_flow(
+    sender_id: str, state: dict, user_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle crisis and emergency situations (Part X)."""
+    raw_u = user_message.strip().upper()
+
+    # Detect crisis type from NL
+    detected_crisis = None
+    for kw, crisis_type in _CRISIS_KEYWORDS.items():
+        if kw in en_lower:
+            detected_crisis = crisis_type
+            break
+
+    # Emergency accommodation (X1)
+    if detected_crisis == "emergency" or raw_u == "EMERGENCY_BOOK":
+        state["step"] = "city"
+        state["_emergency_mode"] = True
+        return (
+            "🚨 EMERGENCY BOOKING — Prioritising Your Request Now\n\n"
+            "I'm searching for available rooms for immediate check-in.\n\n"
+            "For your safety, please also contact:\n"
+            "📞 Emergency services: 112 (EU) | 999 (UK) | 911 (US)\n"
+            "📞 Flood/disaster helpline: your local authority\n\n"
+            "Which is your current city or nearest city?",
+            [
+                {"content_type": "text", "title": "⚡ Search NOW", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Speak to Agent", "payload": "AGENT_HANDOFF"},
+            ],
+        )
+
+    # Stranded traveler / flight cancelled (X2)
+    if detected_crisis == "stranded" or raw_u == "STRANDED_TRAVELER":
+        state["_emergency_mode"] = True
+        return (
+            "✈️ Flight Cancelled — I'll Find You a Hotel Fast!\n\n"
+            "I'm sorry about your flight. Let me help you quickly.\n\n"
+            "⚠️ Tip: Keep your airline cancellation notice —\n"
+            "many airlines reimburse hotel costs up to £200/night.\n"
+            "I can prepare an itemised receipt for your airline claim.\n\n"
+            "What matters most right now?",
+            [
+                {"content_type": "text", "title": "🚌 Free hotel shuttle",  "payload": "STRAND_SHUTTLE"},
+                {"content_type": "text", "title": "💰 Cheapest available",  "payload": "STRAND_CHEAP"},
+                {"content_type": "text", "title": "🛎️ Comfortable option",  "payload": "STRAND_COMFORT"},
+                {"content_type": "text", "title": "📄 Airline claim receipt","payload": "STRAND_RECEIPT"},
+                {"content_type": "text", "title": "Speak to Agent",         "payload": "AGENT_HANDOFF"},
+            ],
+        )
+
+    if raw_u in ("STRAND_SHUTTLE", "STRAND_CHEAP", "STRAND_COMFORT"):
+        pref = {"STRAND_SHUTTLE": "free shuttle", "STRAND_CHEAP": "cheapest",
+                "STRAND_COMFORT": "comfortable"}.get(raw_u, "")
+        state["step"] = "city"
+        state["_emergency_mode"] = True
+        return (
+            f"🚌 Searching for hotels with {pref} near you.\n\n"
+            "Which airport are you at?\n"
+            "(Type the airport name or city)",
+            [],
+        )
+
+    if raw_u == "STRAND_RECEIPT":
+        return (
+            "📄 Airline Claim Receipt\n\n"
+            "I can prepare an itemised receipt for your airline.\n"
+            "Please provide your booking reference (or make a new booking first):",
+            [
+                {"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Book Hotel First", "payload": "ACTION_BOOK"},
+            ],
+        )
+
+    # Overbooking recovery (X3)
+    if detected_crisis == "overbooking" or raw_u == "OVERBOOK_RECOVERY":
+        return (
+            "😔 Overbooking — We Sincerely Apologise\n\n"
+            "This should never happen, and we take full responsibility.\n\n"
+            "Here's what we'll do for you RIGHT NOW:\n"
+            "✅ Find a comparable or BETTER hotel nearby\n"
+            "✅ Cost difference (if higher) is fully covered\n"
+            "✅ Taxi to the new hotel — fully covered by BookBot\n"
+            "✅ 5,000 loyalty points added for the inconvenience\n\n"
+            "Please share your booking reference so I can find\n"
+            "the best alternative immediately.",
+            [
+                {"content_type": "text", "title": "Enter Booking Reference", "payload": "LOOKUP_BOOKING"},
+                {"content_type": "text", "title": "Speak to Agent NOW",      "payload": "AGENT_HANDOFF"},
+                {"content_type": "text", "title": "Full Refund Instead",     "payload": "CANCEL_BOOKING"},
+            ],
+        )
+
+    # Medical emergency (X4)
+    if detected_crisis == "medical_emergency" or raw_u == "MEDICAL_EMERGENCY":
+        # Try to find the user's current hotel city from active booking
+        hotel_city = state.get("city", "")
+        hotel_name = state.get("hotel_name", "your hotel")
+        city_s = f" near {hotel_name}" if hotel_name else ""
+        return (
+            f"🚨 MEDICAL EMERGENCY — IMMEDIATE HELP{city_s}\n\n"
+            "CALL EMERGENCY SERVICES NOW:\n"
+            "📞 112 — universal emergency (EU, Asia, 100+ countries)\n"
+            "📞 999 — emergency (UK)\n"
+            "📞 911 — emergency (USA/Canada)\n"
+            "📞 102 — ambulance (India)\n\n"
+            "🏥 FINDING NEAREST HOSPITALS...\n\n"
+            f"I've alerted the hotel reception about your emergency.\n\n"
+            "Please tell the hotel receptionist to call an ambulance NOW\n"
+            "or ask for the hotel doctor on call.\n\n"
+            "What is your current city so I can find the nearest hospital?",
+            [
+                {"content_type": "text", "title": "📞 Call 112 Emergency",  "payload": "CALL_EMERGENCY"},
+                {"content_type": "text", "title": "Speak to Agent",         "payload": "AGENT_HANDOFF"},
+                {"content_type": "text", "title": "Find Hospital",          "payload": "FIND_HOSPITAL"},
+            ],
+        )
+
+    if raw_u == "CALL_EMERGENCY":
+        return (
+            "🚨 EMERGENCY: Please call 112 immediately.\n\n"
+            "If you cannot call, ask someone nearby to call for you\n"
+            "or alert the hotel reception.\n\n"
+            "Stay on the line with emergency services.",
+            [{"content_type": "text", "title": "I need help booking", "payload": "AGENT_HANDOFF"}],
+        )
+
+    if raw_u == "FIND_HOSPITAL":
+        city = state.get("city", "")
+        city_s = f" in {city}" if city else ""
+        return (
+            f"🏥 Finding nearest hospitals{city_s}...\n\n"
+            "For the most accurate results, please type your\n"
+            "exact location or nearest landmark.",
+            [{"content_type": "text", "title": "Speak to Agent", "payload": "AGENT_HANDOFF"}],
+        )
+
+    # Lost passport / documents (X5)
+    if detected_crisis == "lost_docs" or raw_u == "LOST_PASSPORT":
+        state["crisis_step"] = "nationality"
+        return (
+            "😟 Lost Passport — Step-by-Step Guide\n\n"
+            "Don't panic — I'll guide you through this.\n\n"
+            "STEP 1 — Report to police (required by all embassies)\n"
+            "  → Go to nearest police station\n"
+            "  → Ask for a 'lost passport report'\n"
+            "  → Keep the report number\n\n"
+            "STEP 2 — Contact your embassy\n"
+            "  What is your nationality?",
+            [
+                {"content_type": "text", "title": "Indian",     "payload": "EMBASSY_INDIAN"},
+                {"content_type": "text", "title": "British",    "payload": "EMBASSY_BRITISH"},
+                {"content_type": "text", "title": "American",   "payload": "EMBASSY_AMERICAN"},
+                {"content_type": "text", "title": "Australian", "payload": "EMBASSY_AUSTRALIAN"},
+                {"content_type": "text", "title": "Canadian",   "payload": "EMBASSY_CANADIAN"},
+                {"content_type": "text", "title": "Other",      "payload": "EMBASSY_OTHER"},
+            ],
+        )
+
+    if raw_u.startswith("EMBASSY_"):
+        nat_key = raw_u[8:].lower()
+        if nat_key == "other":
+            state["crisis_step"] = "nationality"
+            return (
+                "Please type your nationality (e.g. French, German, Japanese):",
+                [],
+            )
+        entry = _EMBASSY_CONTACTS.get(nat_key)
+        if entry:
+            country, contact = entry
+        else:
+            country, contact = nat_key.capitalize(), "Please visit your country's embassy website for emergency passport contact details."
+        state.pop("crisis_step", None)
+        return (
+            f"🏛️ {country} Emergency Passport Help\n\n"
+            f"{contact}\n\n"
+            "STEP 3 — Check in to hotel with alternate ID:\n"
+            "✅ Driving licence (domestic)\n"
+            "✅ Birth certificate + photo ID\n"
+            "✅ Emergency travel document from embassy\n\n"
+            "STEP 4 — I can help:\n"
+            "📧 Send hotel your booking confirmation with photo\n"
+            "📞 Contact hotel on your behalf to explain the situation\n"
+            "📋 Prepare a guest verification letter",
+            [
+                {"content_type": "text", "title": "Contact Hotel for Me", "payload": "AGENT_HANDOFF"},
+                {"content_type": "text", "title": "My Bookings",          "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Main Menu",            "payload": "RESTART"},
+            ],
+        )
+
+    if state.get("crisis_step") == "nationality":
+        nat_key = en_lower.strip().rstrip("n").lower()  # "indian" → "india"
+        state.pop("crisis_step", None)
+        entry = _EMBASSY_CONTACTS.get(nat_key) or _EMBASSY_CONTACTS.get(nat_key + "n")
+        if entry:
+            country, contact = entry
+            return (
+                f"🏛️ {country} Embassy Emergency Contact\n\n{contact}\n\n"
+                "Is there anything else I can help with?",
+                _MAIN_BUTTONS,
+            )
+        return (
+            "I don't have that country's embassy details handy.\n"
+            "Please search: '[your country] embassy emergency passport'\n"
+            "or visit your country's foreign ministry website.",
+            _MAIN_BUTTONS,
+        )
+
+    return None, []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PART Y — AI UPSELL & CROSS-SELL ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _handle_upsell_flow(
+    sender_id: str, state: dict, user_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle intelligent upsell / cross-sell suggestions (Part Y)."""
+    raw_u = user_message.strip().upper()
+
+    # Y1 — Room upgrade offer
+    if raw_u == "UPSELL_UPGRADE":
+        hotel    = state.get("hotel_name", "your hotel")
+        room     = state.get("room_name", "your current room")
+        currency = state.get("selected_hotel", {}).get("currency", "")
+        current_price = state.get("selected_room", {}).get("price_per_night", 0)
+        upgrade_delta = round(current_price * 0.30, 0) if current_price else 3200
+        return (
+            f"🌟 Exclusive Upgrade Offer — {hotel}!\n\n"
+            f"YOUR CURRENT ROOM:\n"
+            f"  {room}\n\n"
+            f"UPGRADE AVAILABLE:\n"
+            f"  Premier Suite / Sea View Room\n"
+            f"  🌊 Panoramic view\n"
+            f"  🛁 Plunge pool / premium bath\n"
+            f"  🍾 Complimentary champagne on arrival\n"
+            f"  🛎️ Butler service included\n\n"
+            f"Upgrade cost: Just {currency} {upgrade_delta:.0f}/night extra\n"
+            f"(Limited time offer — expires in 12 hrs)\n\n"
+            "Would you like to upgrade?",
+            [
+                {"content_type": "text", "title": f"✅ Upgrade for {currency} {upgrade_delta:.0f}/night",
+                 "payload": "UPSELL_UPGRADE_CONFIRM"},
+                {"content_type": "text", "title": "🖼️ Show photos first",    "payload": "UPSELL_UPGRADE_PHOTOS"},
+                {"content_type": "text", "title": "❌ Keep my room",         "payload": "RESTART"},
+            ],
+        )
+
+    if raw_u == "UPSELL_UPGRADE_CONFIRM":
+        state["_room_upgraded"] = True
+        return (
+            "✅ Great! Your room has been upgraded.\n\n"
+            "The charge will be added to your total.\n"
+            "Looking forward to your stay!",
+            _MAIN_BUTTONS,
+        )
+
+    if raw_u == "UPSELL_UPGRADE_PHOTOS":
+        hotel = state.get("hotel_name", "the hotel")
+        return (
+            f"Here is the suite / upgraded room at {hotel}.\n\n"
+            "The views are spectacular — would you like to upgrade?",
+            [
+                {"content_type": "text", "title": "✅ Yes — Upgrade",   "payload": "UPSELL_UPGRADE_CONFIRM"},
+                {"content_type": "text", "title": "❌ No thanks",        "payload": "RESTART"},
+            ],
+        )
+
+    # Y2 — Dining package upsell
+    if raw_u == "UPSELL_DINING" or any(kw in en_lower for kw in (
+        "add meal", "add breakfast", "add dinner", "half board", "full board",
+        "meal plan upsell", "dining package"
+    )):
+        currency = state.get("selected_hotel", {}).get("currency", "")
+        return (
+            "🍽️ Add a Dining Package — Save vs À La Carte!\n\n"
+            "HALF-BOARD (Breakfast + Dinner):\n"
+            f"→ +{currency} 45/person/night (saves ~{currency} 60 vs paying separately)\n"
+            "✅ Full breakfast (7–10 AM)\n"
+            "✅ 4-course dinner at hotel restaurant\n"
+            "✅ Kids eat free (under 10)\n\n"
+            "BREAKFAST ONLY:\n"
+            f"→ +{currency} 22/person/night\n"
+            "✅ Award-winning hotel breakfast\n"
+            "✅ Fresh options, coffee bar\n\n"
+            "Which would you prefer?",
+            [
+                {"content_type": "text", "title": "🍷 Half-Board",        "payload": "MEAL_HB"},
+                {"content_type": "text", "title": "☕ Breakfast Only",    "payload": "MEAL_BB"},
+                {"content_type": "text", "title": "🚫 Stay room-only",    "payload": "MEAL_RO"},
+                {"content_type": "text", "title": "🍽️ Show menu first",   "payload": "FAQ_RESTAURANT"},
+            ],
+        )
+
+    # Y3 — Spa & wellness cross-sell (triggered for 3+ night bookings)
+    if raw_u == "UPSELL_SPA" or (
+        "spa" in en_lower and "add" in en_lower
+        or "wellness" in en_lower and "package" in en_lower
+        or "bali" in en_lower and any(kw in en_lower for kw in ("massage", "yoga", "retreat", "wellness"))
+    ):
+        nights = state.get("_nights", 1)
+        currency = state.get("selected_hotel", {}).get("currency", "$")
+        daily_massage = 35
+        couples_pkg   = 80
+        full_retreat  = 120
+        return (
+            f"🌿 Wellness & Spa Packages — {nights} Nights\n\n"
+            "1. Daily 60-min Massage\n"
+            f"   → +{currency}{daily_massage}/day ({currency}{daily_massage * nights} total)\n"
+            "   🌺 Traditional technique | In-room or spa\n\n"
+            "2. Couples Yoga + Massage Package\n"
+            f"   → +{currency}{couples_pkg}/day ({currency}{couples_pkg * nights} total)\n"
+            "   🧘‍♀️ Sunrise yoga + 90-min couples massage\n"
+            "   🥤 Detox smoothies included\n\n"
+            "3. Full Wellness Retreat\n"
+            f"   → +{currency}{full_retreat}/day ({currency}{full_retreat * nights} total)\n"
+            "   Yoga, meditation, massage, healthy meals,\n"
+            "   sunset cruise + sound healing\n\n"
+            "Limited spots available!",
+            [
+                {"content_type": "text", "title": "💆 Daily Massage",      "payload": "ADDON_SPA"},
+                {"content_type": "text", "title": "👫 Couples Package",    "payload": "ADDON_ROMANCE"},
+                {"content_type": "text", "title": "🌿 Full Retreat",       "payload": "ADDON_SPA"},
+                {"content_type": "text", "title": "🙅 No thanks",          "payload": "RESTART"},
+            ],
+        )
+
+    # Y4 — Airport transfer upsell (shown at booking confirmation)
+    if raw_u == "UPSELL_TRANSFER" or (
+        "add transfer" in en_lower or "airport transfer" in en_lower and "add" in en_lower
+    ):
+        currency = state.get("selected_hotel", {}).get("currency", "")
+        return (
+            "✈️ Add Airport Transfer?\n\n"
+            "Don't forget you'll need to get from the airport to the hotel.\n\n"
+            "Option A — Economy Car (up to 4 passengers):\n"
+            f"  → {currency} 1,200 one-way | {currency} 2,200 return\n"
+            "  🚗 Toyota Innova | A/C | Driver with name board\n\n"
+            "Option B — Premium Car (up to 4 passengers):\n"
+            f"  → {currency} 2,500 one-way | {currency} 4,500 return\n"
+            "  🚘 Mercedes E-Class | Meet & Greet in arrivals\n\n"
+            "Option C — Minibus (5–8 passengers):\n"
+            f"  → {currency} 3,200 one-way | {currency} 5,800 return\n"
+            "  🚌 For groups or large luggage\n\n"
+            "ℹ️ All drivers track your flight live\n"
+            "— they wait even if your flight is delayed.",
+            [
+                {"content_type": "text", "title": "🚗 Economy Transfer",    "payload": "ADDON_TRANSFER_BOTH"},
+                {"content_type": "text", "title": "🚘 Premium Transfer",    "payload": "ADDON_TRANSFER_BOTH"},
+                {"content_type": "text", "title": "🚌 Minibus",             "payload": "ADDON_TRANSFER_BOTH"},
+                {"content_type": "text", "title": "✈️ Different airport",   "payload": "UPSELL_TRANSFER"},
+                {"content_type": "text", "title": "🙅 I'll arrange my own", "payload": "RESTART"},
+            ],
+        )
+
+    # Upsell trigger keywords
+    if any(kw in en_lower for kw in (
+        "upgrade room", "better room", "suite upgrade", "upsell",
+        "add spa", "add wellness", "add massage",
+        "add dining", "add meal plan",
+        "airport pickup", "airport drop",
+    )):
+        if any(kw in en_lower for kw in ("upgrade", "suite", "better room")):
+            return _handle_upsell_flow(sender_id, state, "UPSELL_UPGRADE", "upsell upgrade")
+        if any(kw in en_lower for kw in ("spa", "massage", "wellness")):
+            return _handle_upsell_flow(sender_id, state, "UPSELL_SPA", "upsell spa")
+        if any(kw in en_lower for kw in ("dining", "meal plan", "breakfast", "half board")):
+            return _handle_upsell_flow(sender_id, state, "UPSELL_DINING", "upsell dining")
+        if any(kw in en_lower for kw in ("airport", "transfer", "pickup")):
+            return _handle_upsell_flow(sender_id, state, "UPSELL_TRANSFER", "upsell transfer")
+
+    return None, []
+
+
 
 _TELEGRAM_COMMANDS = {
     "/start":       ("GET_STARTED",  "book"),
@@ -4414,6 +5496,18 @@ async def process_message(request: Request):
             "GTYPE_", "LONGSTAY_", "ACCESSIBLE_", "ACC_", "PET_",
             "MCITY_", "ROMANTIC_", "ROM_", "WED_",
             "EARLY_CHECKIN", "SPA_BOOKING", "COMPLAINT",
+            # Part U — Seasonal
+            "NYE_", "XMAS_", "VAL_", "RAM_", "MONSOON_", "CONF_", "SPORT_",
+            # Part V — Corporate
+            "CORP_", "CORP_SETUP", "CORP_TEAM", "CORP_INVOICE_", "CORP_RPT",
+            # Part W — Accessibility
+            "ACCESS_", "ACCESSIBLE_BOOKING",
+            # Part X — Crisis
+            "EMERGENCY_", "EMERGENCY_BOOK", "STRANDED_", "STRANDED_TRAVELER",
+            "STRAND_", "OVERBOOK_", "MEDICAL_EMERGENCY", "MEDICAL_EMERGENCY",
+            "LOST_PASSPORT", "EMBASSY_", "CALL_EMERGENCY", "FIND_HOSPITAL",
+            # Part Y — Upsell
+            "UPSELL_", "UPGRADE_OFFER",
         )
 
         # ── Part G6/G7/G8: Booking reference action payloads ──────────────────
@@ -4519,6 +5613,11 @@ async def process_message(request: Request):
         if bot_en is None:
             # Try sub-flow handlers in priority order
             for _handler in [
+                lambda: _handle_crisis_flow(sender_id, state, user_message, en_lower),
+                lambda: _handle_accessibility_flow(sender_id, state, user_message, en_lower),
+                lambda: _handle_seasonal_flow(sender_id, state, user_message, en_lower),
+                lambda: _handle_corporate_flow(sender_id, state, user_message, en_lower),
+                lambda: _handle_upsell_flow(sender_id, state, user_message, en_lower),
                 lambda: _handle_loyalty_flow(sender_id, state, user_message, en_lower),
                 lambda: _handle_pre_arrival_flow(sender_id, state, user_message, en_lower),
                 lambda: _handle_in_stay_flow(sender_id, state, user_message, en_lower),
