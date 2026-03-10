@@ -5,7 +5,8 @@ Synchronous PostgreSQL client for BookBot processor.
 Uses psycopg2 with DATABASE_URL — no Supabase SDK needed.
 
 Tables used (see hotel_ai_supabase_schema.sql):
-  hotels, inventory, bookings, users
+  hotel_partners, room_types, room_availability, room_rates,
+  bookings, guests, cancellations, users
 
 All functions are SYNCHRONOUS — they run from the booking state
 machine in processor.py which is a regular (non-async) context.
@@ -91,8 +92,9 @@ def search_hotels(
                     """
                     SELECT id, name, description, city, country,
                            star_rating, amenities, currency,
-                           check_in_time, check_out_time, thumbnail_url
-                    FROM   hotels
+                           check_in_time, check_out_time, thumbnail_url,
+                           contact_email
+                    FROM   hotel_partners
                     WHERE  is_active = TRUE
                       AND  LOWER(city) = LOWER(%s)
                     LIMIT  20
@@ -106,27 +108,36 @@ def search_hotels(
                 hotel_ids = [str(h["id"]) for h in hotels]
                 ph = ",".join(["%s"] * len(hotel_ids))
 
-                # 2. Aggregate inventory for the date range
+                # 2. Aggregate availability across room_types + room_availability + room_rates
                 cur.execute(
                     f"""
                     SELECT
-                        hotel_id::text,
-                        room_type_code,
-                        room_type_name,
-                        MIN(available_count)                     AS min_avail,
-                        MAX(max_adults)                          AS max_adults,
-                        MAX(max_children)                        AS max_children,
-                        (array_agg(rate_plans ORDER BY date))[1] AS rate_plans
-                    FROM   inventory
-                    WHERE  hotel_id::text IN ({ph})
-                      AND  date >= %s
-                      AND  date <  %s
-                      AND  available_count > 0
-                      AND  is_blackout = FALSE
-                    GROUP  BY hotel_id, room_type_code, room_type_name
-                    HAVING COUNT(*) >= %s
+                        rt.hotel_id::text,
+                        rt.id::text                                    AS room_type_id,
+                        rt.code                                        AS room_type_code,
+                        rt.name                                        AS room_type_name,
+                        rt.max_adults,
+                        rt.max_children,
+                        MIN(ra.available_count)                        AS min_avail,
+                        jsonb_object_agg(
+                            COALESCE(rr.rate_type, 'room_only'),
+                            jsonb_build_object('price_per_night', rr.base_price)
+                        )                                              AS rate_plans
+                    FROM   room_types rt
+                    JOIN   room_availability ra ON ra.room_type_id = rt.id
+                    LEFT   JOIN room_rates rr   ON rr.room_type_id = rt.id
+                                               AND rr.valid_from   <= %s
+                                               AND rr.valid_to     >= %s
+                    WHERE  rt.hotel_id::text IN ({ph})
+                      AND  ra.date >= %s
+                      AND  ra.date <  %s
+                      AND  ra.available_count > 0
+                      AND  ra.is_blackout = FALSE
+                    GROUP  BY rt.hotel_id, rt.id, rt.code, rt.name,
+                              rt.max_adults, rt.max_children
+                    HAVING COUNT(DISTINCT ra.date) >= %s
                     """,
-                    hotel_ids + [ci, co, nights],
+                    [ci, co] + hotel_ids + [ci, co, nights],
                 )
                 rooms_rows = cur.fetchall()
         finally:
@@ -160,6 +171,7 @@ def search_hotels(
                         pass
 
         rooms_by_hotel.setdefault(hid, []).append({
+            "room_type_id":    row["room_type_id"],
             "room_type_code":  row["room_type_code"],
             "room_type_name":  row["room_type_name"],
             "available_count": int(row.get("min_avail") or 0),
@@ -255,16 +267,30 @@ def get_or_create_user(
 # ── Booking operations ────────────────────────────────────────────────────────
 
 def get_user_bookings(user_id: str) -> list:
-    """Return the 10 most-recent bookings for a user (joined with hotel name)."""
+    """Return the 10 most-recent bookings for a user (joined with hotel/room/guest)."""
     try:
         conn = _get_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT b.*, h.name AS hotel_name
+                    SELECT
+                        b.*,
+                        h.name                                         AS hotel_name,
+                        h.contact_email                                AS hotel_email,
+                        rt.name                                        AS room_name,
+                        rt.code                                        AS room_type_code,
+                        b.num_adults                                   AS adults,
+                        b.num_children                                 AS children,
+                        b.meal_plan                                    AS meal_plan_code,
+                        g.first_name || ' ' || COALESCE(g.last_name, '') AS guest_name,
+                        g.email                                        AS guest_email,
+                        g.phone                                        AS guest_phone
                     FROM   bookings b
-                    LEFT   JOIN hotels h ON b.hotel_id = h.id
+                    LEFT   JOIN hotel_partners h ON b.hotel_id    = h.id
+                    LEFT   JOIN room_types rt    ON b.room_type_id = rt.id
+                    LEFT   JOIN guests g         ON g.booking_id  = b.id
+                                               AND g.is_primary   = TRUE
                     WHERE  b.user_id = %s::uuid
                     ORDER  BY b.created_at DESC
                     LIMIT  10
@@ -296,8 +322,9 @@ def create_booking(
     rate_plan: str = "room_only",
     meal_plan: str = "room_only",
     num_rooms: int = 1,
+    room_type_id: str = "",
 ) -> Optional[dict]:
-    """Insert a new booking row. Returns the inserted dict (with booking_reference)."""
+    """Insert a booking row + primary guest row. Returns the inserted dict."""
     booking_ref = _gen_booking_ref()
     # Tax calculation (18% GST inclusive)
     tax_rate    = 0.18
@@ -321,36 +348,74 @@ def create_booking(
                 uid = user_id  if user_id  else None
                 hid = hotel_id if hotel_id else None
 
+                # Resolve room_type_id UUID from code if not supplied directly
+                rtid: Optional[str] = room_type_id if room_type_id else None
+                if not rtid and hid and room_type_code:
+                    cur.execute(
+                        """
+                        SELECT id FROM room_types
+                        WHERE  hotel_id = %s::uuid AND code = %s
+                        LIMIT  1
+                        """,
+                        (hid, room_type_code),
+                    )
+                    rt_row = cur.fetchone()
+                    rtid = str(rt_row["id"]) if rt_row else None
+
                 cur.execute(
                     """
                     INSERT INTO bookings (
-                        booking_reference, user_id, hotel_id, room_type_code,
+                        booking_reference, user_id, hotel_id, room_type_id,
                         rate_plan, meal_plan, check_in, check_out,
                         num_adults, num_children, num_rooms,
-                        primary_guest_name, primary_guest_email, primary_guest_phone,
                         total_amount, base_amount, tax_amount, currency,
                         special_requests, status, payment_status
                     ) VALUES (
-                        %s, %s::uuid, %s::uuid, %s,
+                        %s, %s::uuid, %s::uuid, %s::uuid,
                         %s, %s, %s::date, %s::date,
-                        %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s, %s,
                         %s, 'confirmed', 'pending'
                     ) RETURNING *
                     """,
                     (
-                        booking_ref, uid, hid, room_type_code,
+                        booking_ref, uid, hid, rtid,
                         rate_plan, meal_plan, check_in, check_out,
                         num_adults, num_children, num_rooms,
-                        primary_guest_name, primary_guest_email, primary_guest_phone,
                         total_amount, base_amount, tax_amount, currency,
                         special_requests,
                     ),
                 )
                 row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return None
+                booking_id = row["id"]
+
+                # Insert primary guest into guests table
+                if primary_guest_name:
+                    name_parts = primary_guest_name.strip().split(" ", 1)
+                    first = name_parts[0] or "Guest"
+                    last  = name_parts[1] if len(name_parts) > 1 else "-"
+                    cur.execute(
+                        """
+                        INSERT INTO guests (
+                            booking_id, first_name, last_name,
+                            email, phone, is_primary
+                        ) VALUES (%s, %s, %s, %s, %s, TRUE)
+                        """,
+                        (booking_id, first, last,
+                         primary_guest_email or None,
+                         primary_guest_phone or None),
+                    )
+
                 conn.commit()
-                return dict(row) if row else {"booking_reference": booking_ref}
+                result = dict(row)
+                # Expose guest fields for downstream use
+                result["guest_name"]  = primary_guest_name
+                result["guest_email"] = primary_guest_email
+                result["guest_phone"] = primary_guest_phone
+                return result
         finally:
             conn.close()
     except Exception as e:
@@ -358,8 +423,8 @@ def create_booking(
         return None
 
 
-def cancel_booking(booking_id: str) -> bool:
-    """Cancel a booking by ID. Returns True on success."""
+def cancel_booking(booking_ref: str, cancelled_by: str = "guest") -> bool:
+    """Cancel a booking by booking_reference. Returns True on success."""
     try:
         conn = _get_conn()
         try:
@@ -370,12 +435,27 @@ def cancel_booking(booking_id: str) -> bool:
                     SET    status       = 'cancelled',
                            cancelled_at = NOW(),
                            updated_at   = NOW()
-                    WHERE  id = %s::uuid
+                    WHERE  UPPER(booking_reference) = UPPER(%s)
+                      AND  status NOT IN ('cancelled', 'no_show')
+                    RETURNING id, booking_reference
                     """,
-                    (booking_id,),
+                    (booking_ref,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return False
+                # Record in cancellations table
+                cur.execute(
+                    """
+                    INSERT INTO cancellations (
+                        booking_id, initiated_by, reason
+                    ) VALUES (%s, %s, 'Guest requested via chat')
+                    """,
+                    (row["id"], cancelled_by),
                 )
                 conn.commit()
-                return cur.rowcount > 0
+                return True
         finally:
             conn.close()
     except Exception as e:
@@ -391,9 +471,23 @@ def get_booking_by_ref(booking_ref: str) -> Optional[dict]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT b.*, h.name AS hotel_name
+                    SELECT
+                        b.*,
+                        h.name                                         AS hotel_name,
+                        h.contact_email                                AS hotel_email,
+                        rt.name                                        AS room_name,
+                        rt.code                                        AS room_type_code,
+                        b.num_adults                                   AS adults,
+                        b.num_children                                 AS children,
+                        b.meal_plan                                    AS meal_plan_code,
+                        g.first_name || ' ' || COALESCE(g.last_name, '') AS guest_name,
+                        g.email                                        AS guest_email,
+                        g.phone                                        AS guest_phone
                     FROM   bookings b
-                    LEFT   JOIN hotels h ON b.hotel_id = h.id
+                    LEFT   JOIN hotel_partners h ON b.hotel_id    = h.id
+                    LEFT   JOIN room_types rt    ON b.room_type_id = rt.id
+                    LEFT   JOIN guests g         ON g.booking_id  = b.id
+                                               AND g.is_primary   = TRUE
                     WHERE  UPPER(b.booking_reference) = UPPER(%s)
                     LIMIT  1
                     """,
@@ -405,4 +499,416 @@ def get_booking_by_ref(booking_ref: str) -> Optional[dict]:
             conn.close()
     except Exception as e:
         logger.error("get_booking_by_ref error: %s", e)
+        return None
+
+
+# ── Voucher validation ────────────────────────────────────────────────────────
+
+def validate_voucher(code: str, user_id: str = "") -> dict:
+    """
+    Validate a voucher code against the vouchers + voucher_redemptions tables.
+    Returns {"valid": True/False, "discount_pct": float, "message": str}.
+    Falls back to a small built-in set when DB is unavailable.
+    """
+    _FALLBACK = {"WELCOME20": 0.20, "SAVE10": 0.10, "DEAL15": 0.15}
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, discount_type, discount_value,
+                           max_uses, valid_from, valid_to, is_active
+                    FROM   vouchers
+                    WHERE  UPPER(code) = UPPER(%s)
+                    LIMIT  1
+                    """,
+                    (code,),
+                )
+                v = cur.fetchone()
+                if not v:
+                    return {"valid": False, "discount_pct": 0,
+                            "message": f"Voucher '{code}' not found or has expired."}
+                v = dict(v)
+                if not v["is_active"]:
+                    return {"valid": False, "discount_pct": 0,
+                            "message": f"Voucher '{code}' is no longer active."}
+                today = date.today()
+                if v["valid_from"] and today < v["valid_from"]:
+                    return {"valid": False, "discount_pct": 0,
+                            "message": f"Voucher '{code}' is not valid yet."}
+                if v["valid_to"] and today > v["valid_to"]:
+                    return {"valid": False, "discount_pct": 0,
+                            "message": f"Voucher '{code}' has expired."}
+                # Check usage count
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM voucher_redemptions WHERE voucher_id = %s",
+                    (v["id"],),
+                )
+                usage = (cur.fetchone() or {}).get("cnt", 0)
+                if v["max_uses"] and usage >= v["max_uses"]:
+                    return {"valid": False, "discount_pct": 0,
+                            "message": f"Voucher '{code}' has already been fully redeemed."}
+                # Check per-user single use
+                if user_id:
+                    cur.execute(
+                        """
+                        SELECT 1 FROM voucher_redemptions vr
+                        JOIN   bookings b ON b.id = vr.booking_id
+                        WHERE  vr.voucher_id = %s AND b.user_id = %s::uuid
+                        LIMIT  1
+                        """,
+                        (v["id"], user_id),
+                    )
+                    if cur.fetchone():
+                        return {"valid": False, "discount_pct": 0,
+                                "message": f"Voucher '{code}' has already been used on your account."}
+
+                pct = float(v["discount_value"]) if v["discount_type"] == "percentage" else 0.0
+                return {"valid": True, "voucher_id": str(v["id"]),
+                        "discount_pct": pct, "discount_value": float(v["discount_value"]),
+                        "discount_type": v["discount_type"],
+                        "message": f"Voucher '{code}' applied!"}
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("validate_voucher DB error: %s", e)
+        # Graceful fallback to hardcoded set
+        code_u = code.upper()
+        if code_u in _FALLBACK:
+            return {"valid": True, "voucher_id": None,
+                    "discount_pct": _FALLBACK[code_u],
+                    "discount_value": _FALLBACK[code_u],
+                    "discount_type": "percentage",
+                    "message": f"Voucher '{code_u}' applied!"}
+        return {"valid": False, "discount_pct": 0,
+                "message": f"Voucher '{code}' not found or has expired."}
+
+
+def redeem_voucher(voucher_id: str, booking_id: str, discount_amount: float) -> bool:
+    """Record a voucher_redemptions row. Called after booking is created."""
+    if not voucher_id:
+        return False
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO voucher_redemptions (voucher_id, booking_id, discount_amount)
+                    VALUES (%s::uuid, %s::uuid, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (voucher_id, booking_id, discount_amount),
+                )
+                conn.commit()
+                return True
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("redeem_voucher error: %s", e)
+        return False
+
+
+# ── Payment recording ─────────────────────────────────────────────────────────
+
+def record_payment(
+    booking_id: str,
+    amount: float,
+    currency: str,
+    payment_method: str,
+    status: str = "pending",
+    gateway_ref: str = "",
+) -> Optional[dict]:
+    """Insert a row into the payments table. Returns the inserted row dict."""
+    # Normalize payment_method string to schema's gateway enum
+    _gw_map = {
+        "stripe": "stripe", "card": "stripe", "credit card": "stripe",
+        "paypal": "paypal",
+        "upi": "upi",
+        "pay at hotel": "hotel", "cash": "hotel", "hotel": "hotel",
+        "net banking": "netbanking", "netbanking": "netbanking",
+        "crypto": "crypto", "bitcoin": "crypto",
+        "bizum": "bizum", "split": "split", "corporate": "corporate",
+    }
+    gateway = _gw_map.get((payment_method or "").lower(), "stripe")
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO payments (
+                        booking_id, amount, currency,
+                        gateway, payment_method_type, transaction_id, status
+                    ) VALUES (
+                        %s::uuid, %s, %s, %s, %s, %s, %s
+                    ) RETURNING *
+                    """,
+                    (booking_id, amount, currency,
+                     gateway, payment_method or None,
+                     gateway_ref or None, status),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("record_payment error: %s", e)
+        return None
+
+
+# ── Loyalty ───────────────────────────────────────────────────────────────────
+
+def get_or_create_loyalty_account(user_id: str) -> Optional[dict]:
+    """Fetch or create a loyalty_accounts row for the user."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM loyalty_accounts WHERE user_id = %s::uuid LIMIT 1",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+                cur.execute(
+                    """
+                    INSERT INTO loyalty_accounts (user_id, tier)
+                    VALUES (%s::uuid, 'bronze')
+                    ON CONFLICT (user_id) DO UPDATE SET updated_at = NOW()
+                    RETURNING *
+                    """,
+                    (user_id,),
+                )
+                new_row = cur.fetchone()
+                conn.commit()
+                return dict(new_row) if new_row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("get_or_create_loyalty_account error: %s", e)
+        return None
+
+
+def add_loyalty_points(
+    user_id: str,
+    points: int,
+    transaction_type: str = "earn",
+    description: str = "",
+    booking_id: str = "",
+) -> Optional[dict]:
+    """
+    Add (or deduct if negative) loyalty points.
+    Inserts a loyalty_transactions row and updates loyalty_accounts.
+    Returns updated loyalty_accounts row.
+    """
+    if points == 0:
+        return None
+    # Map caller's transaction_type to schema's action_type enum
+    _type_map = {
+        "earn": "booking", "booking": "booking",
+        "redeem": "redemption", "redemption": "redemption",
+        "referral": "referral", "review": "review",
+        "checkin": "checkin", "expiry": "expiry",
+        "adjustment": "adjustment",
+    }
+    action_type = _type_map.get(transaction_type, "adjustment")
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Ensure account exists
+                cur.execute(
+                    """
+                    INSERT INTO loyalty_accounts (user_id, tier)
+                    VALUES (%s::uuid, 'bronze')
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    (user_id,),
+                )
+                # Fetch account id and current total_points
+                cur.execute(
+                    "SELECT id, total_points, available_points FROM loyalty_accounts WHERE user_id = %s::uuid",
+                    (user_id,),
+                )
+                acct_row = cur.fetchone()
+                if not acct_row:
+                    return None
+                acct_id = acct_row["id"]
+                new_total = max(0, (acct_row["total_points"] or 0) + points)
+                # Update balances
+                cur.execute(
+                    """
+                    UPDATE loyalty_accounts
+                    SET    total_points     = %s,
+                           available_points = GREATEST(0, available_points + %s),
+                           updated_at       = NOW()
+                    WHERE  user_id = %s::uuid
+                    RETURNING *
+                    """,
+                    (new_total, points, user_id),
+                )
+                acct = cur.fetchone()
+                # Log transaction
+                points_earned = points if points > 0 else 0
+                points_spent  = abs(points) if points < 0 else 0
+                cur.execute(
+                    """
+                    INSERT INTO loyalty_transactions (
+                        user_id, loyalty_account_id, booking_id,
+                        action_type, points_earned, points_spent,
+                        running_balance, description
+                    ) VALUES (
+                        %s::uuid, %s, %s,
+                        %s, %s, %s,
+                        %s, %s
+                    )
+                    """,
+                    (user_id, acct_id,
+                     booking_id if booking_id else None,
+                     action_type, points_earned, points_spent,
+                     new_total, description or None),
+                )
+                conn.commit()
+                return dict(acct) if acct else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("add_loyalty_points error: %s", e)
+        return None
+
+
+# ── Handoff / support ticket ──────────────────────────────────────────────────
+
+def create_support_ticket(
+    user_id: str,
+    booking_ref: str = "",
+    subject: str = "",
+    message: str = "",
+    priority: str = "normal",
+) -> Optional[dict]:
+    """Create a support_ticket row. Returns the inserted row dict."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Resolve booking_id from ref if provided
+                booking_id = None
+                if booking_ref:
+                    cur.execute(
+                        "SELECT id FROM bookings WHERE UPPER(booking_reference) = UPPER(%s) LIMIT 1",
+                        (booking_ref,),
+                    )
+                    b = cur.fetchone()
+                    if b:
+                        booking_id = b["id"]
+
+                # Generate unique ticket_ref  (e.g. TKT-20260310-4821)
+                date_part = datetime.utcnow().strftime("%Y%m%d")
+                ticket_ref = f"TKT-{date_part}-{random.randint(1000, 9999)}"
+
+                cur.execute(
+                    """
+                    INSERT INTO support_tickets (
+                        ticket_ref, user_id, booking_id,
+                        subject, description, priority, status
+                    ) VALUES (
+                        %s, %s::uuid, %s,
+                        %s, %s, %s, 'open'
+                    ) RETURNING *
+                    """,
+                    (ticket_ref, user_id or None, booking_id,
+                     subject or "Chat support request",
+                     message or None, priority),
+                )
+                ticket = cur.fetchone()
+                if ticket and message:
+                    cur.execute(
+                        """
+                        INSERT INTO support_ticket_messages (ticket_id, sender_type, message)
+                        VALUES (%s, 'user', %s)
+                        """,
+                        (ticket["id"], message),
+                    )
+                conn.commit()
+                return dict(ticket) if ticket else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("create_support_ticket error: %s", e)
+        return None
+
+
+def create_handoff_request(
+    user_id: str,
+    booking_ref: str = "",
+    reason: str = "",
+    channel: str = "messenger",
+) -> Optional[dict]:
+    """Insert a handoff_requests row. Returns the inserted dict."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                # handoff_requests has no booking_id or channel columns;
+                # store booking_ref and channel in slots_filled JSONB
+                slots: dict = {}
+                if booking_ref:
+                    slots["booking_ref"] = booking_ref
+                if channel:
+                    slots["channel"] = channel
+                cur.execute(
+                    """
+                    INSERT INTO handoff_requests (
+                        user_id, reason, booking_intent, slots_filled, status
+                    ) VALUES (
+                        %s::uuid, %s, %s, %s::jsonb, 'pending'
+                    ) RETURNING *
+                    """,
+                    (user_id or None, reason or None,
+                     booking_ref or None,
+                     json.dumps(slots)),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("create_handoff_request error: %s", e)
+        return None
+
+
+def get_last_booking(user_id: str) -> Optional[dict]:
+    """Return the most recent non-cancelled booking for a user (SELECT only)."""
+    try:
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT b.id, b.booking_reference, b.check_in, b.check_out,
+                           b.status, b.total_amount, b.currency,
+                           b.num_adults, b.num_children,
+                           h.name  AS hotel_name, h.city AS hotel_city, h.id AS hotel_id,
+                           rt.name AS room_name,  rt.code AS room_type_code, rt.id AS room_type_id
+                    FROM   bookings b
+                    LEFT JOIN hotel_partners h  ON b.hotel_id     = h.id
+                    LEFT JOIN room_types     rt ON b.room_type_id = rt.id
+                    WHERE  b.user_id = %s::uuid
+                      AND  b.status NOT IN ('cancelled', 'no_show', 'pending')
+                    ORDER  BY b.created_at DESC
+                    LIMIT  1
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("get_last_booking error: %s", e)
         return None

@@ -46,5 +46,13 @@ celery_app.conf.update(
             "task":     "tasks.scheduled_tasks.release_stale_soft_locks",
             "schedule": crontab(minute="*/15"),   # every 15 min
         },
+        "send-checkin-reminders-daily": {
+            "task":     "tasks.scheduled_tasks.send_checkin_reminders",
+            "schedule": crontab(hour=9, minute=0),    # 09:00 UTC daily (K5)
+        },
+        "recover-abandoned-bookings": {
+            "task":     "tasks.scheduled_tasks.recover_abandoned_bookings",
+            "schedule": crontab(minute="*/30"),        # every 30 min (K4)
+        },
     },
 )

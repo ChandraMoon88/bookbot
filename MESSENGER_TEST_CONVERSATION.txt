@@ -4376,24 +4376,6 @@ States stored in Redis (TTL: 30 minutes, extended on each interaction):
   }
 
 ────────────────────────────────────────────────────────────────────────────────────
-DATABASE TABLES INVOLVED IN EACH STEP
-────────────────────────────────────────────────────────────────────────────────────
-
-  users             — PSID, lang, loyalty_id, name, email, phone
-  loyalty_members   — member_id, tier, points, total_spent, join_date
-  hotels            — hotel_id, name, city, stars, amenities, lat, lng
-  rooms             — room_id, hotel_id, type, capacity, price, availability
-  bookings          — booking_ref, hotel_id, room_id, guest details, dates, status
-  booking_addons    — booking_ref, addon_type, amount
-  support_tickets   — ticket_id, booking_ref, issue, status, agent_id
-  reviews           — review_id, booking_ref, rating, text, date
-  price_alerts      — alert_id, user_psid, hotel_id, dates, target_price
-  loyalty_points_log— transaction_id, member_id, points, reason, date
-  hotel_notifications— notification_id, hotel_id, booking_ref, type, sent_at
-  vouchers          — code, discount_type, amount, min_spend, expiry, max_uses
-  faq               — faq_id, hotel_id, question, answer, embedding
-
-────────────────────────────────────────────────────────────────────────────────────
 PREREQUISITES BEFORE TESTING
 ────────────────────────────────────────────────────────────────────────────────────
 

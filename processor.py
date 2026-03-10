@@ -37,6 +37,14 @@ try:
         create_booking,
         cancel_booking,
         get_booking_by_ref,
+        validate_voucher,
+        redeem_voucher,
+        record_payment,
+        get_or_create_loyalty_account,
+        add_loyalty_points,
+        create_support_ticket,
+        create_handoff_request,
+        get_last_booking,
     )
     _DB_AVAILABLE = True
 except ImportError:
@@ -1776,12 +1784,16 @@ def _handle_booking_flow(
             return (
                 f"How would you like to pay?\n\nTotal: {currency} {total:.2f}",
                 [
-                    {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
-                    {"content_type": "text", "title": "Credit/Debit Card","payload": "PAY_CARD"},
-                    {"content_type": "text", "title": "UPI",              "payload": "PAY_UPI"},
-                    {"content_type": "text", "title": "PayPal",           "payload": "PAY_PAYPAL"},
-                    {"content_type": "text", "title": "Use Voucher Code", "payload": "PAY_VOUCHER"},
-                    {"content_type": "text", "title": "Use Points",       "payload": "PAY_POINTS"},
+                    {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                    {"content_type": "text", "title": "Credit/Debit Card", "payload": "PAY_CARD"},
+                    {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
+                    {"content_type": "text", "title": "PayPal",            "payload": "PAY_PAYPAL"},
+                    {"content_type": "text", "title": "Net Banking",       "payload": "PAY_NETBANKING"},
+                    {"content_type": "text", "title": "Crypto",            "payload": "PAY_CRYPTO"},
+                    {"content_type": "text", "title": "Split Payment",     "payload": "PAY_SPLIT"},
+                    {"content_type": "text", "title": "Bizum",             "payload": "PAY_BIZUM"},
+                    {"content_type": "text", "title": "Use Voucher Code",  "payload": "PAY_VOUCHER"},
+                    {"content_type": "text", "title": "Use Points",        "payload": "PAY_POINTS"},
                 ],
             )
         if raw_u_local == "RESTART" or any(w in raw_l for w in _no):
@@ -1821,33 +1833,52 @@ def _handle_booking_flow(
             # User entered code
             code = raw_message.strip().upper()
             state.pop("awaiting_voucher", None)
-            _VOUCHERS = {"WELCOME20": 0.20, "SAVE10": 0.10, "DEAL15": 0.15}
             if raw_u in ("SKIP", "SKIP_VOUCHER"):
                 pass
-            elif code in _VOUCHERS:
-                discount = round(total * _VOUCHERS[code], 2)
-                total_after = total - discount
-                state["voucher_applied"] = code
-                state["voucher_discount"] = discount
-                return (
-                    f"Voucher {code} applied!\nDiscount: -{currency} {discount:.2f}\n"
-                    f"New total: {currency} {total_after:.2f}\n\nChoose payment method:",
-                    [
-                        {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
-                        {"content_type": "text", "title": "Credit/Debit Card", "payload": "PAY_CARD"},
-                        {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
-                        {"content_type": "text", "title": "PayPal",            "payload": "PAY_PAYPAL"},
-                    ],
-                )
             else:
-                return (
-                    f"Voucher '{code}' not found or has expired. Please try another code or continue.",
-                    [
-                        {"content_type": "text", "title": "Try Another Code", "payload": "PAY_VOUCHER"},
-                        {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
-                        {"content_type": "text", "title": "Card",             "payload": "PAY_CARD"},
-                    ],
-                )
+                user_id = state.get("user_id", "")
+                if _DB_AVAILABLE:
+                    v_result = validate_voucher(code, user_id)
+                else:
+                    _FB = {"WELCOME20": 0.20, "SAVE10": 0.10, "DEAL15": 0.15}
+                    if code in _FB:
+                        v_result = {"valid": True, "voucher_id": None,
+                                    "discount_pct": _FB[code], "discount_type": "percentage",
+                                    "message": f"Voucher {code} applied!"}
+                    else:
+                        v_result = {"valid": False, "discount_pct": 0,
+                                    "message": f"Voucher '{code}' not found or has expired."}
+                if v_result["valid"]:
+                    if v_result.get("discount_type") == "percentage":
+                        discount = round(total * v_result["discount_pct"], 2)
+                    else:
+                        discount = min(float(v_result.get("discount_value", 0)), total)
+                    total_after = total - discount
+                    state["voucher_applied"]    = code
+                    state["voucher_id"]         = v_result.get("voucher_id")
+                    state["voucher_discount"]   = discount
+                    return (
+                        f"Voucher {code} applied!\nDiscount: -{currency} {discount:.2f}\n"
+                        f"New total: {currency} {total_after:.2f}\n\nChoose payment method:",
+                        [
+                            {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                            {"content_type": "text", "title": "Credit/Debit Card", "payload": "PAY_CARD"},
+                            {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
+                            {"content_type": "text", "title": "PayPal",            "payload": "PAY_PAYPAL"},
+                            {"content_type": "text", "title": "Net Banking",       "payload": "PAY_NETBANKING"},
+                            {"content_type": "text", "title": "Crypto",            "payload": "PAY_CRYPTO"},
+                            {"content_type": "text", "title": "Split Payment",     "payload": "PAY_SPLIT"},
+                        ],
+                    )
+                else:
+                    return (
+                        f"{v_result['message']}\n\nPlease try another code or continue.",
+                        [
+                            {"content_type": "text", "title": "Try Another Code", "payload": "PAY_VOUCHER"},
+                            {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
+                            {"content_type": "text", "title": "Card",             "payload": "PAY_CARD"},
+                        ],
+                    )
 
         # Use loyalty points
         if raw_u == "PAY_POINTS":
@@ -1884,6 +1915,8 @@ def _handle_booking_flow(
                     {"content_type": "text", "title": "Pay at Hotel", "payload": "PAY_AT_HOTEL"},
                     {"content_type": "text", "title": "Card",         "payload": "PAY_CARD"},
                     {"content_type": "text", "title": "UPI",          "payload": "PAY_UPI"},
+                    {"content_type": "text", "title": "Net Banking",  "payload": "PAY_NETBANKING"},
+                    {"content_type": "text", "title": "Crypto",       "payload": "PAY_CRYPTO"},
                 ],
             )
 
@@ -1975,17 +2008,162 @@ def _handle_booking_flow(
                 ],
             )
 
+        # Net Banking
+        if raw_u == "PAY_NETBANKING":
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            return (
+                f"Net Banking — {currency} {final_total:.2f}\n\nSelect your bank:",
+                [
+                    {"content_type": "text", "title": "SBI",    "payload": "PAY_NETBANK_SBI"},
+                    {"content_type": "text", "title": "HDFC",   "payload": "PAY_NETBANK_HDFC"},
+                    {"content_type": "text", "title": "ICICI",  "payload": "PAY_NETBANK_ICICI"},
+                    {"content_type": "text", "title": "Axis",   "payload": "PAY_NETBANK_AXIS"},
+                    {"content_type": "text", "title": "Kotak",  "payload": "PAY_NETBANK_KOTAK"},
+                    {"content_type": "text", "title": "◀ Back", "payload": "PAYMENT_BACK"},
+                ],
+            )
+
+        if raw_u.startswith("PAY_NETBANK_") and raw_u != "PAY_NETBANKING":
+            bank = raw_u.replace("PAY_NETBANK_", "")
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            import os as _os2, random as _r2, string as _s2
+            base_url = _os2.getenv("PAYMENT_BASE_URL", "https://pay.bookbot.io")
+            session_id = state.get("payment_session_id") or "".join(
+                _r2.choices(_s2.ascii_uppercase + _s2.digits, k=8)
+            )
+            state["payment_session_id"]    = session_id
+            state["payment_method_chosen"] = "netbanking"
+            pay_link = f"{base_url}/netbanking/{bank}/{session_id}"
+            return (
+                f"Redirecting to {bank} Net Banking portal...\n\n"
+                f"🔒 {pay_link}\n\nTap 'Payment Done' after completing.",
+                [
+                    {"content_type": "text", "title": "✅ Payment Done", "payload": "PAY_CARD_DONE"},
+                    {"content_type": "text", "title": "◀ Back",          "payload": "PAYMENT_BACK"},
+                ],
+            )
+
+        # Cryptocurrency
+        if raw_u == "PAY_CRYPTO":
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            return (
+                f"Cryptocurrency Payment — {currency} {final_total:.2f}\n\nChoose a coin:",
+                [
+                    {"content_type": "text", "title": "Bitcoin (BTC)",  "payload": "PAY_CRYPTO_BTC"},
+                    {"content_type": "text", "title": "Ethereum (ETH)", "payload": "PAY_CRYPTO_ETH"},
+                    {"content_type": "text", "title": "USDT (Tether)",  "payload": "PAY_CRYPTO_USDT"},
+                    {"content_type": "text", "title": "USDC",           "payload": "PAY_CRYPTO_USDC"},
+                    {"content_type": "text", "title": "◀ Back",         "payload": "PAYMENT_BACK"},
+                ],
+            )
+
+        if raw_u.startswith("PAY_CRYPTO_") and raw_u != "PAY_CRYPTO_DONE":
+            _coin_rates = {
+                "BTC":  ("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh", 0.0000105),
+                "ETH":  ("0x742d35Cc6634C0532925a3b844Bc454e4438f44e",   0.000285),
+                "USDT": ("0x742d35Cc6634C0532925a3b844Bc454e4438f44e",   0.012),
+                "USDC": ("0x742d35Cc6634C0532925a3b844Bc454e4438f44e",   0.012),
+            }
+            coin = raw_u.replace("PAY_CRYPTO_", "")
+            if coin in _coin_rates:
+                wallet, rate = _coin_rates[coin]
+                discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+                final_total = total - discount
+                crypto_amount = final_total * rate
+                state["payment_method_chosen"] = "crypto"
+                state["crypto_coin"]           = coin
+                return (
+                    f"Send exactly {crypto_amount:.8f} {coin} to:\n\n"
+                    f"Wallet: {wallet}\n\n"
+                    f"⚠️ Rate valid for 15 minutes. Send exact amount only.",
+                    [
+                        {"content_type": "text", "title": "✅ Payment Sent", "payload": "PAY_CRYPTO_DONE"},
+                        {"content_type": "text", "title": "◀ Back",          "payload": "PAYMENT_BACK"},
+                    ],
+                )
+
+        if raw_u == "PAY_CRYPTO_DONE":
+            if not state.get("payment_method_chosen"):
+                state["payment_method_chosen"] = "crypto"
+            return _create_booking(sender_id, state)
+
+        # Split Payment
+        if raw_u == "PAY_SPLIT":
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            return (
+                f"Split Payment — {currency} {final_total:.2f}\n\nSplit into how many parts?",
+                [
+                    {"content_type": "text", "title": "2 equal parts", "payload": "PAY_SPLIT_2"},
+                    {"content_type": "text", "title": "3 equal parts", "payload": "PAY_SPLIT_3"},
+                    {"content_type": "text", "title": "◀ Back",        "payload": "PAYMENT_BACK"},
+                ],
+            )
+
+        if raw_u in ("PAY_SPLIT_2", "PAY_SPLIT_3"):
+            import os as _os3, random as _r3, string as _s3
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            n = 2 if raw_u == "PAY_SPLIT_2" else 3
+            per_part = final_total / n
+            base_url = _os3.getenv("PAYMENT_BASE_URL", "https://pay.bookbot.io")
+            session_id = state.get("payment_session_id") or "".join(
+                _r3.choices(_s3.ascii_uppercase + _s3.digits, k=8)
+            )
+            state["payment_session_id"]    = session_id
+            state["payment_method_chosen"] = "split"
+            links_txt = "\n\n".join(
+                f"Payment {i + 1} of {n} — {currency} {per_part:.2f}\n"
+                f"🔒 {base_url}/split/{i + 1}/{session_id}-P{i + 1}"
+                for i in range(n)
+            )
+            return (
+                f"{links_txt}\n\nBooking confirmed once all payments are received.",
+                [
+                    {"content_type": "text", "title": "✅ All Paid", "payload": "PAY_SPLIT_DONE"},
+                    {"content_type": "text", "title": "◀ Back",      "payload": "PAYMENT_BACK"},
+                ],
+            )
+
+        if raw_u == "PAY_SPLIT_DONE":
+            state["payment_method_chosen"] = "split"
+            return _create_booking(sender_id, state)
+
+        # Bizum (Spain)
+        if raw_u == "PAY_BIZUM":
+            import os as _os4
+            discount = state.get("voucher_discount", 0) + state.get("points_discount", 0)
+            final_total = total - discount
+            bizum_phone = _os4.getenv("BIZUM_PHONE", "+34600000000")
+            return (
+                f"Bizum Payment — {currency} {final_total:.2f}\n\n"
+                f"Send to: {bizum_phone}\n"
+                f"Concept: BookBot Booking\n\n"
+                "Once sent, tap 'I have paid'.",
+                [
+                    {"content_type": "text", "title": "✅ I have paid", "payload": "PAY_CARD_DONE"},
+                    {"content_type": "text", "title": "◀ Back",         "payload": "PAYMENT_BACK"},
+                ],
+            )
+
         # Back to payment selection
         if raw_u == "PAYMENT_BACK":
             return (
                 f"Choose your payment method.\nTotal: {currency} {total:.2f}",
                 [
-                    {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
-                    {"content_type": "text", "title": "Credit/Debit Card","payload": "PAY_CARD"},
-                    {"content_type": "text", "title": "UPI",              "payload": "PAY_UPI"},
-                    {"content_type": "text", "title": "PayPal",           "payload": "PAY_PAYPAL"},
-                    {"content_type": "text", "title": "Use Voucher Code", "payload": "PAY_VOUCHER"},
-                    {"content_type": "text", "title": "Use Points",       "payload": "PAY_POINTS"},
+                    {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                    {"content_type": "text", "title": "Credit/Debit Card", "payload": "PAY_CARD"},
+                    {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
+                    {"content_type": "text", "title": "PayPal",            "payload": "PAY_PAYPAL"},
+                    {"content_type": "text", "title": "Net Banking",       "payload": "PAY_NETBANKING"},
+                    {"content_type": "text", "title": "Crypto",            "payload": "PAY_CRYPTO"},
+                    {"content_type": "text", "title": "Split Payment",     "payload": "PAY_SPLIT"},
+                    {"content_type": "text", "title": "Bizum",             "payload": "PAY_BIZUM"},
+                    {"content_type": "text", "title": "Use Voucher Code",  "payload": "PAY_VOUCHER"},
+                    {"content_type": "text", "title": "Use Points",        "payload": "PAY_POINTS"},
                 ],
             )
 
@@ -1993,11 +2171,13 @@ def _handle_booking_flow(
         return (
             f"Please choose a payment method.\nTotal: {currency} {total:.2f}",
             [
-                {"content_type": "text", "title": "Pay at Hotel",     "payload": "PAY_AT_HOTEL"},
-                {"content_type": "text", "title": "Credit/Debit Card","payload": "PAY_CARD"},
-                {"content_type": "text", "title": "UPI",              "payload": "PAY_UPI"},
-                {"content_type": "text", "title": "PayPal",           "payload": "PAY_PAYPAL"},
-                {"content_type": "text", "title": "Use Voucher Code", "payload": "PAY_VOUCHER"},
+                {"content_type": "text", "title": "Pay at Hotel",      "payload": "PAY_AT_HOTEL"},
+                {"content_type": "text", "title": "Credit/Debit Card", "payload": "PAY_CARD"},
+                {"content_type": "text", "title": "UPI",               "payload": "PAY_UPI"},
+                {"content_type": "text", "title": "PayPal",            "payload": "PAY_PAYPAL"},
+                {"content_type": "text", "title": "Net Banking",       "payload": "PAY_NETBANKING"},
+                {"content_type": "text", "title": "Crypto",            "payload": "PAY_CRYPTO"},
+                {"content_type": "text", "title": "Use Voucher Code",  "payload": "PAY_VOUCHER"},
             ],
         )
 
@@ -2031,12 +2211,14 @@ def _create_booking(sender_id: str, state: dict) -> tuple[str, list]:
             logger.error("get_or_create_user: %s", e)
 
     booking_ref = None
+    booking_db_id = None
     if _DB_AVAILABLE:
         try:
             result = create_booking(
                 user_id              = user_id or "",
                 hotel_id             = hotel.get("id", ""),
                 room_type_code       = room.get("room_type_code", "STD"),
+                room_type_id         = room.get("room_type_id", ""),
                 check_in             = state.get("checkin",  ""),
                 check_out            = state.get("checkout", ""),
                 num_adults           = state.get("num_adults",   1),
@@ -2051,7 +2233,21 @@ def _create_booking(sender_id: str, state: dict) -> tuple[str, list]:
                 meal_plan            = state.get("meal_plan",  "room_only"),
             )
             if result:
-                booking_ref = result.get("booking_reference")
+                booking_ref   = result.get("booking_reference")
+                booking_db_id = str(result.get("id", ""))
+                # Record payment row
+                record_payment(
+                    booking_id     = booking_db_id,
+                    amount         = total,
+                    currency       = currency,
+                    payment_method = pay_method,
+                    status         = "completed" if pay_method != "pay_at_hotel" else "pending",
+                    gateway_ref    = state.get("payment_session_id", ""),
+                )
+                # Record voucher redemption
+                voucher_id = state.get("voucher_id")
+                if voucher_id and voucher_discount > 0:
+                    redeem_voucher(voucher_id, booking_db_id, voucher_discount)
         except Exception as e:
             logger.error("create_booking: %s", e, exc_info=True)
 
@@ -2081,6 +2277,17 @@ def _create_booking(sender_id: str, state: dict) -> tuple[str, list]:
     # Award loyalty points (10 pts per 100 currency units)
     pts_earned = int((price_n * nights) / 100 * 10)
     state["loyalty_points"] = state.get("loyalty_points", 0) + pts_earned
+    if _DB_AVAILABLE and user_id and pts_earned > 0:
+        try:
+            add_loyalty_points(
+                user_id          = user_id,
+                points           = pts_earned,
+                transaction_type = "earn",
+                description      = f"Booking {booking_ref or ''}",
+                booking_id       = booking_db_id or "",
+            )
+        except Exception as e:
+            logger.error("add_loyalty_points: %s", e)
 
     # Send hotel admin notification
     _notify_hotel_new_booking(
@@ -2639,9 +2846,315 @@ def _notify_hotel_cancellation(booking_ref: str, hotel_name: str, hotel_email: s
         print(f"[notify] Cancellation notification failed: {e}", flush=True)
 
 
+def _notify_hotel_lost_found(
+    hotel_name: str, hotel_email: str,
+    guest_name: str, guest_phone: str,
+    room: str, stay_dates: str,
+    items: str, report_ref: str,
+) -> None:
+    """Email hotel about a lost item report."""
+    try:
+        import smtplib, os as _os
+        from email.mime.text import MIMEText
+        smtp_host  = _os.getenv("SMTP_HOST", "")
+        smtp_user  = _os.getenv("SMTP_USER", "")
+        smtp_pass  = _os.getenv("SMTP_PASS", "")
+        admin_email= _os.getenv("HOTEL_ADMIN_EMAIL", hotel_email or "")
+        if not (smtp_host and smtp_user and admin_email):
+            print(f"[notify] Lost & Found skipped (SMTP not configured). Ref: {report_ref}", flush=True)
+            return
+        body = (
+            f"Lost Item Report — {report_ref}\n{'='*40}\n"
+            f"Guest   : {guest_name}\n"
+            f"Phone   : {guest_phone or 'N/A'}\n"
+            f"Room    : {room or 'N/A'}\n"
+            f"Dates   : {stay_dates or 'N/A'}\n"
+            f"Items   : {items}\n\n"
+            "Please search the room/common areas and contact the guest within 24 hours.\n"
+        )
+        msg = MIMEText(body)
+        msg["Subject"] = f"Lost Item Report — {report_ref} — {hotel_name}"
+        msg["From"]    = smtp_user
+        msg["To"]      = admin_email
+        with smtplib.SMTP_SSL(smtp_host, 465) as s:
+            s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
+        print(f"[notify] Lost & Found notification sent for {report_ref}", flush=True)
+    except Exception as e:
+        print(f"[notify] Lost & Found notification failed: {e}", flush=True)
+
+
+def _notify_hotel_complaint(
+    hotel_name: str, hotel_email: str,
+    guest_name: str, complaint_text: str, comp_ref: str,
+) -> None:
+    """Email hotel about an in-stay complaint."""
+    try:
+        import smtplib, os as _os
+        from email.mime.text import MIMEText
+        smtp_host  = _os.getenv("SMTP_HOST", "")
+        smtp_user  = _os.getenv("SMTP_USER", "")
+        smtp_pass  = _os.getenv("SMTP_PASS", "")
+        admin_email= _os.getenv("HOTEL_ADMIN_EMAIL", hotel_email or "")
+        if not (smtp_host and smtp_user and admin_email):
+            print(f"[notify] Complaint skipped (SMTP not configured). Ref: {comp_ref}", flush=True)
+            return
+        body = (
+            f"In-Stay Complaint — {comp_ref}\n{'='*40}\n"
+            f"Guest     : {guest_name}\n"
+            f"Hotel     : {hotel_name}\n"
+            f"Complaint : {complaint_text}\n\n"
+            "Please follow up with the guest immediately.\n"
+        )
+        msg = MIMEText(body)
+        msg["Subject"] = f"Guest Complaint — {comp_ref} — {hotel_name}"
+        msg["From"]    = smtp_user
+        msg["To"]      = admin_email
+        with smtplib.SMTP_SSL(smtp_host, 465) as s:
+            s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
+        print(f"[notify] Complaint notification sent for {comp_ref}", flush=True)
+    except Exception as e:
+        print(f"[notify] Complaint notification failed: {e}", flush=True)
 # ─────────────────────────────────────────────────────────────────────────────
-# LOYALTY PROGRAM FLOW
+
+
 # ─────────────────────────────────────────────────────────────────────────────
+# STEP H9 — REFUND STATUS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _handle_refund_status(
+    sender_id: str, state: dict, raw_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle refund enquiries: status, escalation, email. Returns (None,) if not a refund intent."""
+    raw_u = raw_message.strip().upper()
+
+    _refund_kw = {
+        "refund", "want a refund", "money back", "get my money",
+        "refund status", "when will i get", "when do i get", "where is my refund",
+        "how long refund", "refund processing", "refund my", "my refund",
+    }
+
+    is_trigger = (
+        raw_u in ("REFUND_STATUS", "REFUND_REQUEST", "ESCALATE_REFUND",
+                  "EMAIL_REFUND_CONF", "I_WANT_REFUND")
+        or state.get("refund_step") is not None
+        or any(kw in en_lower for kw in _refund_kw)
+    )
+    if not is_trigger:
+        return None, []
+
+    # Escalate refund
+    if raw_u == "ESCALATE_REFUND":
+        state["refund_step"] = None
+        return (
+            "Refund Escalation\n\n"
+            "I have flagged your refund for urgent review by our finance team.\n"
+            "You will receive an update within 24 hours.\n\n"
+            "Reference: Your original booking reference.",
+            [
+                {"content_type": "text", "title": "Talk to Agent",  "payload": "AGENT_HANDOFF"},
+                {"content_type": "text", "title": "My Bookings",    "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Main Menu",      "payload": "RESTART"},
+            ],
+        )
+
+    # Email confirmation of refund
+    if raw_u == "EMAIL_REFUND_CONF":
+        state["refund_step"] = None
+        return (
+            "Refund confirmation email sent to your registered email address.\n\n"
+            "Please check your inbox (and spam folder).",
+            [
+                {"content_type": "text", "title": "My Bookings", "payload": "MY_BOOKINGS"},
+                {"content_type": "text", "title": "Main Menu",   "payload": "RESTART"},
+            ],
+        )
+
+    # Check if user mentioned a booking reference in the message
+    import re as _re_ref
+    _ref_match = _re_ref.search(r'\b(BB-[A-Z]{2,5}-\d{8}-[A-Z0-9]{4})\b', raw_message, _re_ref.IGNORECASE)
+    ref_mentioned = _ref_match.group(1).upper() if _ref_match else None
+
+    # Try to find cancellation / refund info from DB
+    booking = None
+    if _DB_AVAILABLE:
+        try:
+            if ref_mentioned:
+                booking = get_booking_by_ref(ref_mentioned)
+            else:
+                # Fall back to last cancelled booking for this user
+                user_id = state.get("user_id")
+                if user_id:
+                    from db_client import get_user_bookings
+                    user_bkgs = get_user_bookings(user_id)
+                    cancelled = [b for b in (user_bkgs or []) if b.get("status") == "cancelled"]
+                    if cancelled:
+                        booking = cancelled[0]
+        except Exception:
+            pass
+
+    if booking:
+        bref   = booking.get("booking_reference", "N/A")
+        status = booking.get("status", "cancelled")
+        amt    = booking.get("total_amount") or booking.get("amount_paid")
+        curr   = booking.get("currency", "")
+        method = booking.get("payment_method", "original payment method")
+        hotel  = booking.get("hotel_name", "")
+        import random as _rand
+        refund_ref = f"REFUND-{bref}-{_rand.randint(100,999):03d}"
+        # Estimate expected date: 5-7 days from cancellation / today
+        from datetime import date as _date, timedelta as _td
+        expected_from = (_date.today() + _td(days=5)).strftime("%d %b %Y")
+        expected_to   = (_date.today() + _td(days=7)).strftime("%d %b %Y")
+        amt_str = f"{curr} {float(amt):,.2f}" if amt else "the original amount"
+
+        if status == "cancelled":
+            bot_en = (
+                f"Refund status for {bref}:\n\n"
+                f"Status   : Refund Initiated\n"
+                f"Amount   : {amt_str}\n"
+                f"Method   : {method}\n"
+                f"Expected : {expected_from} – {expected_to} (5–7 business days)\n\n"
+                f"Reference: {refund_ref}\n\n"
+                "Having trouble? Tap below to escalate."
+            )
+        else:
+            bot_en = (
+                f"Booking {bref} ({hotel}) has status: {status}.\n\n"
+                "A refund is only available after cancellation.\n"
+                "Would you like to cancel this booking?"
+            )
+        return (
+            bot_en,
+            [
+                {"content_type": "text", "title": "Escalate Refund",      "payload": "ESCALATE_REFUND"},
+                {"content_type": "text", "title": "Email Confirmation",   "payload": "EMAIL_REFUND_CONF"},
+                {"content_type": "text", "title": "Talk to Agent",        "payload": "AGENT_HANDOFF"},
+            ],
+        )
+
+    # No booking found — generic refund info
+    return (
+        "Refund Information\n\n"
+        "Refunds are processed within 5–7 business days after cancellation.\n"
+        "The amount is returned to your original payment method.\n\n"
+        "To check your refund, please share your booking reference number:",
+        [
+            {"content_type": "text", "title": "My Bookings",    "payload": "MY_BOOKINGS"},
+            {"content_type": "text", "title": "Escalate Refund","payload": "ESCALATE_REFUND"},
+            {"content_type": "text", "title": "Talk to Agent",  "payload": "AGENT_HANDOFF"},
+        ],
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP K3 — SMART HOTEL RECOMMENDATIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Curated destination catalogue used when DB history is unavailable
+_SMART_REC_DESTINATIONS = [
+    {
+        "name": "The Leela Palace, New Delhi",
+        "tag":  "Iconic luxury, award-winning spa",
+        "note": "March special: 22% off — From INR 18,000 / night",
+        "city": "new delhi",
+    },
+    {
+        "name": "Six Senses Zil Pasyon, Seychelles",
+        "tag":  "Beach + Luxury, perfect for couples",
+        "note": "Best for March travel — From INR 45,000 / night",
+        "city": "seychelles",
+    },
+    {
+        "name": "Umaid Bhawan Palace, Jodhpur",
+        "tag":  "Royal heritage, unique palace experience",
+        "note": "From INR 22,000 / night",
+        "city": "jodhpur",
+    },
+    {
+        "name": "Park Hyatt, Maldives",
+        "tag":  "Overwater villas, pristine beaches",
+        "note": "From INR 55,000 / night",
+        "city": "maldives",
+    },
+    {
+        "name": "The Ritz-Carlton, Dubai",
+        "tag":  "5-star luxury, iconic skyline views",
+        "note": "From AED 2,500 / night",
+        "city": "dubai",
+    },
+]
+
+
+def _handle_smart_recommendations(
+    sender_id: str, state: dict, raw_message: str, en_lower: str
+) -> tuple[str | None, list]:
+    """Handle K3 Smart Recommendations — suggest hotels based on travel history / preferences."""
+    raw_u = raw_message.strip().upper()
+
+    _smart_kw = {
+        "suggest", "suggest a hotel", "recommend a hotel", "where should i go",
+        "next holiday", "next trip", "hotel recommendation", "recommend hotel",
+        "similar hotel", "similar property", "where to stay", "best hotel for me",
+        "personalised", "personalized", "surprise me",
+    }
+
+    is_trigger = (
+        raw_u in ("SMART_REC", "MORE_RECOMMENDATIONS", "MORE_REC", "SMART_SUGGEST")
+        or any(kw in en_lower for kw in _smart_kw)
+    )
+    if not is_trigger:
+        return None, []
+
+    # Try to personalise using last booking city from DB
+    last_city   = state.get("city", "")
+    last_hotel  = state.get("hotel_name", "")
+    first_name  = (state.get("guest_name") or "").split()[0] if state.get("guest_name") else "traveller"
+
+    if _DB_AVAILABLE and not last_city:
+        try:
+            user_id = state.get("user_id")
+            if user_id:
+                last_bk = get_last_booking(user_id)
+                if last_bk:
+                    last_city  = last_bk.get("hotel_city", "") or ""
+                    last_hotel = last_bk.get("hotel_name",  "") or ""
+        except Exception:
+            pass
+
+    # Pick top 3 destinations — prefer ones not in the user's recent city
+    picks = [d for d in _SMART_REC_DESTINATIONS if last_city.lower() not in d["city"]]
+    picks = (picks + _SMART_REC_DESTINATIONS)[:3]   # pad with all-list if needed
+
+    history_line = (
+        f"Since you enjoyed {last_hotel}, here are similar luxury properties:\n\n"
+        if last_hotel else
+        "Based on popular choices for your profile:\n\n"
+    )
+
+    rec_text = ""
+    for i, d in enumerate(picks, 1):
+        rec_text += f"{i}. {d['name']}\n   {d['tag']}\n   {d['note']}\n\n"
+
+    bot_en = (
+        f"Based on your travel history, I think you would love these!\n\n"
+        f"{history_line}"
+        f"{rec_text.strip()}"
+    )
+
+    buttons = []
+    for d in picks:
+        city_key = d["city"].replace(" ", "+").upper()
+        buttons.append({
+            "content_type": "text",
+            "title":        f"Book {d['name'].split(',')[0].strip()[:20]}",
+            "payload":      f"SUGGEST_CITY_{city_key}",
+        })
+    buttons.append({"content_type": "text", "title": "More Recommendations", "payload": "MORE_RECOMMENDATIONS"})
+
+    return bot_en, buttons
+
 
 def _handle_loyalty_flow(
     sender_id: str, state: dict, raw_message: str, en_lower: str
@@ -3215,6 +3728,15 @@ def _handle_in_stay_flow(
             issue = raw_message.strip()
             import random
             comp_ref = f"COMP-{date.today().strftime('%Y%m%d')}-{random.randint(100,999)}"
+            # Notify hotel of complaint
+            hotel_obj = state.get("selected_hotel", {})
+            _notify_hotel_complaint(
+                hotel_name     = hotel_obj.get("name", state.get("hotel_name", "")),
+                hotel_email    = hotel_obj.get("contact_email", ""),
+                guest_name     = state.get("guest_name", "Guest"),
+                complaint_text = issue,
+                comp_ref       = comp_ref,
+            )
             return (
                 f"Complaint registered — I am escalating this immediately.\n\n"
                 f"Issue   : {issue}\n"
@@ -3254,6 +3776,14 @@ def _handle_in_stay_flow(
         state["in_stay_step"] = None
         import random
         comp_ref = f"COMP-{date.today().strftime('%Y%m%d')}-{random.randint(100,999)}"
+        hotel_obj = state.get("selected_hotel", {})
+        _notify_hotel_complaint(
+            hotel_name     = hotel_obj.get("name", state.get("hotel_name", "")),
+            hotel_email    = hotel_obj.get("contact_email", ""),
+            guest_name     = state.get("guest_name", "Guest"),
+            complaint_text = issue,
+            comp_ref       = comp_ref,
+        )
         return (
             f"Complaint: {issue}\n\n"
             f"Reference: {comp_ref}\n"
@@ -3301,6 +3831,18 @@ def _handle_in_stay_flow(
             item = raw_message.strip()
             import random
             lost_ref = f"LOST-{date.today().strftime('%Y%m%d')}-{random.randint(100,999)}"
+            # Notify hotel of lost item
+            hotel_obj = state.get("selected_hotel", {})
+            _notify_hotel_lost_found(
+                hotel_name  = hotel_obj.get("name", state.get("hotel_name", "")),
+                hotel_email = hotel_obj.get("contact_email", ""),
+                guest_name  = state.get("guest_name", "Guest"),
+                guest_phone = state.get("guest_phone", ""),
+                room        = state.get("room_number", ""),
+                stay_dates  = f"{state.get('checkin','')} to {state.get('checkout','')}",
+                items       = item,
+                report_ref  = lost_ref,
+            )
             return (
                 f"Lost Item Report Submitted\n\n"
                 f"Item(s)   : {item}\n"
@@ -3515,6 +4057,20 @@ def _handle_agent_handoff(
         state.pop("handoff_step", None)
         import random
         ticket_id = f"TKT-{date.today().strftime('%Y%m%d')}-{random.randint(100,999):03d}"
+        message_text = raw_message.strip() if raw_u not in ("LEAVE_MESSAGE",) else ""
+        if _DB_AVAILABLE:
+            try:
+                t = create_support_ticket(
+                    user_id     = state.get("user_id", ""),
+                    booking_ref = state.get("last_booking_ref", ""),
+                    subject     = "Guest message via chat",
+                    message     = message_text,
+                    priority    = "normal",
+                )
+                if t:
+                    ticket_id = f"TKT-{str(t['id'])[:8].upper()}"
+            except Exception as e:
+                logger.error("create_support_ticket: %s", e)
         return (
             f"Message received!\n\n"
             f"Ticket : {ticket_id}\n"
@@ -3524,9 +4080,28 @@ def _handle_agent_handoff(
             _MAIN_BUTTONS,
         )
 
-    # Standard handoff
+    # Standard handoff — create handoff_request + support_ticket in DB
     import random
     ticket_id = f"TKT-{date.today().strftime('%Y%m%d')}-{random.randint(100,999):03d}"
+    if _DB_AVAILABLE:
+        try:
+            hr = create_handoff_request(
+                user_id     = state.get("user_id", ""),
+                booking_ref = state.get("last_booking_ref", ""),
+                reason      = en_lower[:200],
+                channel     = "messenger",
+            )
+            t = create_support_ticket(
+                user_id     = state.get("user_id", ""),
+                booking_ref = state.get("last_booking_ref", ""),
+                subject     = "Live agent request",
+                message     = en_lower[:500],
+                priority    = "normal",
+            )
+            if t:
+                ticket_id = f"TKT-{str(t['id'])[:8].upper()}"
+        except Exception as e:
+            logger.error("create_handoff_request: %s", e)
     state["handoff_step"] = None
     return (
         f"Connecting you to a live agent now.\n\n"
@@ -5127,18 +5702,45 @@ def _detect_negative_sentiment(text: str) -> bool:
     return any(kw in t for kw in _negative) or t.count("!") >= 3
 
 
-def _get_returning_guest_greeting(state: dict, first_name: str) -> str | None:
-    """If we have prior booking data, return a personalized welcome."""
-    if state.get("loyalty_member_id") and state.get("loyalty_points", 0) > 0:
-        pts = state["loyalty_points"]
-        tier_emoji = "🥉" if pts < 10000 else ("🥈" if pts < 50000 else ("🥇" if pts < 100000 else "💎"))
-        return (
-            f"Welcome back, {first_name}! {tier_emoji}\n\n"
-            f"Great to see you again. You have {pts:,} loyalty points.\n\n"
-            "Ready for your next adventure?\n\n"
-            "Tap Book a Hotel to start a new search."
+def _get_returning_guest_greeting(state: dict, first_name: str) -> tuple[str, list] | tuple[None, list]:
+    """Return (personalized_text, buttons) for a returning user, or (None, [])."""
+    pts     = state.get("loyalty_points", 0)
+    user_id = state.get("user_id", "")
+    last_bk = None
+    if user_id and _DB_AVAILABLE:
+        try:
+            last_bk = get_last_booking(user_id)
+        except Exception:
+            pass
+
+    if not (last_bk or pts > 0 or state.get("loyalty_member_id")):
+        return None, []
+
+    tier_emoji = "🥉" if pts < 10000 else ("🥈" if pts < 50000 else ("🥇" if pts < 100000 else "💎"))
+    greet = f"Welcome back, {first_name}! {tier_emoji}\n\n"
+    if pts > 0:
+        greet += f"You have {pts:,} loyalty points.\n\n"
+
+    if last_bk:
+        ci         = str(last_bk.get("check_in",  ""))[:10]
+        co         = str(last_bk.get("check_out", ""))[:10]
+        hotel_name = last_bk.get("hotel_name", "")
+        bk_ref     = last_bk.get("booking_reference", "")
+        greet += (
+            f"Your last stay: {hotel_name} ({ci} → {co})\n\n"
+            "Ready for your next adventure?"
         )
-    return None
+        buttons: list = [
+            {"content_type": "text", "title": "Book Same Hotel", "payload": f"REBOOK_{bk_ref}"},
+            {"content_type": "text", "title": "Search New City", "payload": "BOOK_HOTEL"},
+            {"content_type": "text", "title": "My Bookings",     "payload": "MY_BOOKINGS"},
+        ]
+        if pts > 0:
+            buttons.append({"content_type": "text", "title": "Use My Points", "payload": "PAY_POINTS"})
+        return greet, buttons
+
+    greet += "Ready for your next adventure?"
+    return greet, list(_MAIN_BUTTONS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -5448,6 +6050,48 @@ async def process_message(request: Request):
                 "audio_b64": None, "lang": lang,
             }
 
+        # ── K6: Price alert set ────────────────────────────────────────────────
+        if raw_upper in ("PRICE_ALERT_SET", "SET_PRICE_ALERT", "PRICE_ALERT"):
+            hotel  = state.get("hotel_name", "your selected hotel")
+            city   = state.get("city", "")
+            loc    = f" in {city}" if city else ""
+            bot_en = (
+                f"Price Alert Set!\n\n"
+                f"I will notify you if the price for {hotel}{loc} drops.\n\n"
+                "You will receive a message here as soon as a better rate is available.\n\n"
+                "In the meantime, you can continue searching."
+            )
+            buttons = [
+                {"content_type": "text", "title": "Book Now Instead", "payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Continue Searching","payload": "ACTION_BOOK"},
+                {"content_type": "text", "title": "Main Menu",        "payload": "RESTART"},
+            ]
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
+        # ── K3/K6: SUGGEST_CITY_ payload — start booking flow for recommended city ──
+        if raw_upper.startswith("SUGGEST_CITY_"):
+            city_raw = raw_upper[len("SUGGEST_CITY_"):].replace("+", " ").title()
+            state["city"] = city_raw
+            state["step"] = "checkin"
+            bot_en = (
+                f"Great choice! Let's search for hotels in {city_raw}.\n\n"
+                "What are your check-in and check-out dates?"
+            )
+            buttons = [
+                {"content_type": "text", "title": "This Weekend",   "payload": "CHECKIN_THIS_WEEKEND"},
+                {"content_type": "text", "title": "Next Weekend",   "payload": "CHECKIN_NEXT_WEEKEND"},
+                {"content_type": "text", "title": "Choose Dates",   "payload": "CHECKIN_MANUAL"},
+            ]
+            response_text = translate_to(bot_en, lang) if lang != "en" else bot_en
+            tts_text  = _strip_for_tts(response_text)
+            audio_out = text_to_speech_bytes(tts_text, lang)
+            a64 = base64.b64encode(audio_out).decode() if audio_out else None
+            return {"text": response_text, "buttons": buttons, "audio_b64": a64, "lang": lang}
+
         # ── Part O39: Conversation stop/quit/reset keywords ───────────────────
         if raw_upper in ("STOP", "QUIT", "EXIT", "RESTART", "START_OVER", "START OVER"):
             _reset_booking_slots(state)
@@ -5508,6 +6152,10 @@ async def process_message(request: Request):
             "LOST_PASSPORT", "EMBASSY_", "CALL_EMERGENCY", "FIND_HOSPITAL",
             # Part Y — Upsell
             "UPSELL_", "UPGRADE_OFFER",
+            # H9 — Refund
+            "REFUND_", "ESCALATE_REFUND", "EMAIL_REFUND",
+            # K3 — Smart Recommendations
+            "SMART_REC", "MORE_REC", "MORE_RECOMMEND", "SMART_SUGGEST", "SUGGEST_CITY_",
         )
 
         # ── Part G6/G7/G8: Booking reference action payloads ──────────────────
@@ -5600,7 +6248,7 @@ async def process_message(request: Request):
                                                  "CHECKOUT_", "GUESTS_", "CONFIRM_", "CANCEL_",
                                                  "SKIP_", "RESELECT_", "ADDON_", "PAY_",
                                                  "PAYMENT_")) or raw_upper in (
-            "ACTION_BOOK", "MY_BOOKINGS", "LOOKUP_BOOKING",
+            "ACTION_BOOK", "MY_BOOKINGS", "LOOKUP_BOOKING", "RESUME_BOOKING",
         )
 
         # ── Booking flow ───────────────────────────────────────────────────────
@@ -5613,6 +6261,8 @@ async def process_message(request: Request):
         if bot_en is None:
             # Try sub-flow handlers in priority order
             for _handler in [
+                lambda: _handle_refund_status(sender_id, state, user_message, en_lower),
+                lambda: _handle_smart_recommendations(sender_id, state, user_message, en_lower),
                 lambda: _handle_crisis_flow(sender_id, state, user_message, en_lower),
                 lambda: _handle_accessibility_flow(sender_id, state, user_message, en_lower),
                 lambda: _handle_seasonal_flow(sender_id, state, user_message, en_lower),
@@ -5651,10 +6301,10 @@ async def process_message(request: Request):
             else:
                 # Returning guest personalisation
                 first_name = (state.get("guest_name") or "").split()[0] if state.get("guest_name") else ""
-                returning_msg = _get_returning_guest_greeting(state, first_name) if first_name else None
+                returning_msg, ret_buttons = _get_returning_guest_greeting(state, first_name) if first_name else (None, [])
                 if returning_msg and raw_upper in ("GET_STARTED", "RESTART", "MY_PROFILE"):
                     bot_en  = returning_msg
-                    buttons = _MAIN_BUTTONS
+                    buttons = ret_buttons
                 else:
                     # General conversational fallback — also try booking flow for NL input
                     if not _always_booking:
